@@ -13,7 +13,7 @@
  integer :: res, len_land_vec 
  character(len=8) :: date_str 
  character(len=2) :: hour_str
- character(len=3) :: frac_grid
+ logical :: frac_grid
 
  ! index to map between tile and vector space 
  integer, allocatable :: tile2vector(:,:) 
@@ -35,10 +35,10 @@
  endtype 
  type(grid_type) :: grid_state
 
- character*100      :: orog_path
+ character(len=512) :: orog_path, rst_path, inc_path
  character*20       :: otype ! orography filename stub. For atm only, oro_C${RES}, for atm/ocean oro_C${RES}.mx100
 
- namelist /noahmp_snow/ date_str, hour_str, res, frac_grid, orog_path, otype
+ namelist /noahmp_snow/ date_str, hour_str, res, frac_grid, rst_path, inc_path, orog_path, otype
 !
     call mpi_init(ierr)
     call mpi_comm_size(mpi_comm_world, nprocs, ierr)
@@ -58,9 +58,12 @@
 
     open (action='read', file='apply_incr_nml', iostat=ierr, newunit=lunit)
     read (nml=noahmp_snow, iostat=ierr, unit=lunit)
+    if (myrank==0) then
+        write (6, noahmp_snow)
+    end if
 
     ! SET VARIABLE NAMES FOR SNOW OVER LAND AND GRID
-    if (frac_grid=="YES") then 
+    if (frac_grid) then 
         noahmp_state%name_snow_depth =  'snodl     '
         noahmp_state%name_swe =         'weasdl    '
         grid_state%name_snow_depth =    'snwdph    '
@@ -90,7 +93,7 @@
     allocate(noahmp_state%temperature_soil   (len_land_vec))
     allocate(increment   (len_land_vec)) ! increment to snow depth over land
 
-    if (frac_grid=="YES") then
+    if (frac_grid) then
         allocate(grid_state%land_frac          (len_land_vec)) 
         allocate(grid_state%swe                (len_land_vec)) ! values over full grid
         allocate(grid_state%snow_depth         (len_land_vec)) ! values over full grid
@@ -100,15 +103,15 @@
 
     ! READ RESTART FILE 
 
-    call   read_fv3_restart(myrank, date_str, hour_str, res, ncid, & 
+    call   read_fv3_restart(myrank, rst_path, date_str, hour_str, res, ncid, & 
                 len_land_vec, tile2vector, frac_grid, noahmp_state, grid_state)
 
     ! READ SNOW DEPTH INCREMENT
 
-    call   read_fv3_increment(myrank, date_str, hour_str, res, &
+    call   read_fv3_increment(myrank, inc_path, date_str, hour_str, res, &
                 len_land_vec, tile2vector, noahmp_state%name_snow_depth, increment)
  
-    if (frac_grid=="YES") then ! save background
+    if (frac_grid) then ! save background
         swe_back = noahmp_state%swe
         snow_depth_back = noahmp_state%snow_depth
     endif 
@@ -119,7 +122,7 @@
 
     ! IF FRAC GRID, ADJUST SNOW STATES OVER GRID CELL
 
-    if (frac_grid=="YES") then
+    if (frac_grid) then
 
         ! get the land frac 
          call  read_fv3_orog(myrank, res, orog_path, otype, len_land_vec, tile2vector, & 
@@ -199,11 +202,11 @@
  integer, intent(in) :: myrank, res
  character(len=8), intent(in) :: date_str 
  character(len=2), intent(in) :: hour_str 
- character(len=3), intent(in) :: frac_grid
+ logical, intent(in) :: frac_grid
  integer, allocatable, intent(out) :: tile2vector(:,:)
  integer :: len_land_vec
 
- character(len=100) :: restart_file
+ character(len=512) :: restart_file
  character(len=1) :: rankch
  logical :: file_exists
  integer :: ierr,  ncid
@@ -217,7 +220,7 @@
 
     ! OPEN FILE
     write(rankch, '(i1.1)') (myrank+1)
-    restart_file = date_str//"."//hour_str//"0000.sfc_data.tile"//rankch//".nc"
+    restart_file = trim(rst_path)//"/"//date_str//"."//hour_str//"0000.sfc_data.tile"//rankch//".nc"
 
     inquire(file=trim(restart_file), exist=file_exists)
 
@@ -251,7 +254,7 @@
         enddo 
     enddo
  
-    if (frac_grid=="YES") then 
+    if (frac_grid) then 
 
         write (6, *) 'fractional grid: ammending mask to exclude sea ice from', trim(restart_file)
 
@@ -300,7 +303,7 @@ end subroutine get_fv3_mapping
 ! open fv3 restart, and read in required variables
 ! file is opened as read/write and remains open
 !--------------------------------------------------------------
- subroutine read_fv3_restart(myrank, date_str, hour_str, res, ncid, & 
+ subroutine read_fv3_restart(myrank, rst_path, date_str, hour_str, res, ncid, & 
                 len_land_vec,tile2vector, frac_grid, noahmp_state, grid_state)
 
  implicit none 
@@ -308,16 +311,17 @@ end subroutine get_fv3_mapping
  include 'mpif.h'
 
  integer, intent(in) :: myrank, res, len_land_vec
+ character(len=512), intent(in) :: rst_path
  character(len=8), intent(in) :: date_str 
  character(len=2), intent(in) :: hour_str 
  integer, intent(in) :: tile2vector(len_land_vec,2)
- character(len=3), intent(in) :: frac_grid
+ logical, intent(in) :: frac_grid
 
  integer, intent(out) :: ncid
  type(noahmp_type), intent(inout)  :: noahmp_state
  type(grid_type), intent(inout)  :: grid_state
 
- character(len=100) :: restart_file
+ character(len=512) :: restart_file
  character(len=1) :: rankch
  logical :: file_exists
  integer :: ierr, id_dim, fres
@@ -325,7 +329,7 @@ end subroutine get_fv3_mapping
 
     ! OPEN FILE
     write(rankch, '(i1.1)') (myrank+1)
-    restart_file = date_str//"."//hour_str//"0000.sfc_data.tile"//rankch//".nc"
+    restart_file = trim(rst_path)//"/"//date_str//"."//hour_str//"0000.sfc_data.tile"//rankch//".nc"
 
     inquire(file=trim(restart_file), exist=file_exists)
 
@@ -359,7 +363,7 @@ end subroutine get_fv3_mapping
     call read_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
                         noahmp_state%name_snow_depth, noahmp_state%snow_depth)
 
-   if (frac_grid=="YES") then 
+   if (frac_grid) then 
        ! read swe over grid cell  (file name: sheleg, vert dim 1) 
         call read_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
                             grid_state%name_swe, grid_state%swe)
@@ -411,7 +415,7 @@ end subroutine read_fv3_restart
  include 'mpif.h'
 
  integer, intent(in) :: myrank, res, len_land_vec
- character(len=100), intent(in)  :: orog_path
+ character(len=512), intent(in)  :: orog_path
  character(len=20), intent(in)   :: otype
  integer, intent(in) :: tile2vector(len_land_vec,2)
  type(grid_type), intent(inout) :: grid_state
@@ -465,7 +469,7 @@ end subroutine read_fv3_orog
 !  read in snow depth increment from jedi increment file
 !  file format is same as restart file
 !--------------------------------------------------------------
- subroutine read_fv3_increment(myrank, date_str, hour_str, res, & 
+ subroutine read_fv3_increment(myrank, inc_path, date_str, hour_str, res, & 
                 len_land_vec,tile2vector, control_var, increment)
 
  implicit none 
@@ -473,13 +477,14 @@ end subroutine read_fv3_orog
  include 'mpif.h'
 
  integer, intent(in) :: myrank, res, len_land_vec
+ character(len=512), intent(in) :: inc_path
  character(len=8), intent(in) :: date_str 
  character(len=2), intent(in) :: hour_str 
  integer, intent(in) :: tile2vector(len_land_vec,2)
  character(len=10), intent(in)  :: control_var
  double precision, intent(out) :: increment(len_land_vec)     ! snow depth increment
 
- character(len=100) :: incr_file
+ character(len=512) :: incr_file
  character(len=1) :: rankch
  logical :: file_exists
  integer :: ierr 
@@ -490,7 +495,7 @@ end subroutine read_fv3_orog
  
     ! OPEN FILE
     write(rankch, '(i1.1)') (myrank+1)
-    incr_file = date_str//"."//hour_str//"0000.xainc.sfc_data.tile"//rankch//".nc"
+    incr_file = trim(inc_path)//"/"//"landinc."//date_str//"."//hour_str//"0000.sfc_data.tile"//rankch//".nc"
 
     inquire(file=trim(incr_file), exist=file_exists)
 
@@ -603,7 +608,7 @@ end subroutine read_nc_var3D
  integer, intent(in) :: ncid, res, len_land_vec
  type(noahmp_type), intent(in) :: noahmp_state
  type(grid_type), intent(in) :: grid_state
- character(len=3), intent(in) :: frac_grid
+ logical, intent(in) :: frac_grid
  integer, intent(in) :: tile2vector(len_land_vec,2)
 
  
@@ -615,7 +620,7 @@ end subroutine read_nc_var3D
     call write_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
                         noahmp_state%name_snow_depth, noahmp_state%snow_depth)
 
-    if (frac_grid=="YES") then
+    if (frac_grid) then
        ! write swe over grid (file name: sheleg, vert dim 1) 
         call write_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
                             grid_state%name_swe, grid_state%swe)
