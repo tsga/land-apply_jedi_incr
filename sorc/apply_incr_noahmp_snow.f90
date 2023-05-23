@@ -47,6 +47,9 @@
     print*
     print*,"starting apply_incr_noahmp_snow program on rank ", myrank
 
+    ! SET NAMELIST DEFAULTS
+    rst_path = '.'
+    inc_path = '.'
     ! READ NAMELIST 
 
     inquire (file='apply_incr_nml', exist=file_exists) 
