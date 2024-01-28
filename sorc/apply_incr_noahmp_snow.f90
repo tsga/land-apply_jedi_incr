@@ -709,6 +709,7 @@ subroutine write_nc_var2D(ncid, len_land_vec, res, tile2vector,   &
         ierr = nf90_put_var( ncid, id_var, dummy3D)
         call netcdf_err(ierr, 'writing '//trim(var_name) )
     endif
+    call remove_checksum(ncid, id_var)
  
 end subroutine write_nc_var2D
 
@@ -740,7 +741,39 @@ subroutine write_nc_var3D(ncid, len_land_vec, res, vdim, &
     ! overwrite
     ierr = nf90_put_var( ncid, id_var, dummy3D)
     call netcdf_err(ierr, 'writing '//trim(var_name) )
+    call remove_checksum(ncid, id_var)
  
 end subroutine write_nc_var3D
+
+!> Remove the checksum attribute from a netcdf record.
+!!
+!! @param[in] ncid netcdf file id
+!! @param[in] id_var netcdf variable id.
+!!
+!! @author George Gayno NCEP/EMC
+ subroutine remove_checksum(ncid, id_var)
+
+ implicit none
+
+ integer, intent(in)       :: ncid, id_var
+
+ integer                   :: error
+
+ error=nf90_inquire_attribute(ncid, id_var, 'checksum')
+
+ if (error == 0) then ! attribute was found
+
+   error = nf90_redef(ncid)
+   call netcdf_err(error, 'entering define mode' )
+
+   error=nf90_del_att(ncid, id_var, 'checksum')
+   call netcdf_err(error, 'deleting checksum' )
+
+   error= nf90_enddef(ncid)
+   call netcdf_err(error, 'ending define mode' )
+
+ endif
+
+ end subroutine remove_checksum
 
  end program apply_incr_noahmp_snow
