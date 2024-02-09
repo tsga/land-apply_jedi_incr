@@ -498,7 +498,7 @@ end subroutine read_fv3_orog
  
     ! OPEN FILE
     write(rankch, '(i1.1)') (myrank+1)
-    incr_file = trim(inc_path)//"/"//"landinc."//date_str//"."//hour_str//"0000.sfc_data.tile"//rankch//".nc"
+    incr_file = trim(inc_path)//"/"//"snowinc."//date_str//"."//hour_str//"0000.sfc_data.tile"//rankch//".nc"
 
     inquire(file=trim(incr_file), exist=file_exists)
 
