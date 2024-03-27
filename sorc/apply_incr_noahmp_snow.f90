@@ -61,9 +61,9 @@
 
     open (action='read', file='apply_incr_nml', iostat=ierr, newunit=lunit)
     read (nml=noahmp_snow, iostat=ierr, unit=lunit)
-    if (myrank==0) then
-        write (6, noahmp_snow)
-    end if
+    !if (myrank==0) then
+    !    write (6, noahmp_snow)
+    !end if
 
     ! SET VARIABLE NAMES FOR SNOW OVER LAND AND GRID
     if (frac_grid) then 
