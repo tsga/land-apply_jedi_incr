@@ -21,7 +21,7 @@
  double precision, allocatable :: swe_back(:) 
  double precision, allocatable :: snow_depth_back(:) 
 
- integer :: ierr, nprocs, myrank, my_global_rank, lunit, ncid, n, ntiles, ens_size
+ integer :: ierr, nprocs, myrank, my_global_rank, lunit, ncid, n
  integer :: ntiles, ens_size, ie 
  character(len=3) :: ens_str
  logical :: file_exists
@@ -84,8 +84,8 @@
     endif
 
     do irank=my_global_rank, ntiles*ens_size, nprocs
-        ie = irank/ntiles    !/ Np_til  ! sub array length per proc
-        myrank = MOD(irank, ntiles)  !LENSFC - N_sA * Np_til ! extra grid cells
+        ie = irank/ntiles    
+        myrank = MOD(irank, ntiles)  
 
         write(ens_str, '(I3.3)') (ie+1)
 
