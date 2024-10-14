@@ -21,7 +21,9 @@
  double precision, allocatable :: swe_back(:) 
  double precision, allocatable :: snow_depth_back(:) 
 
- integer :: ierr, nprocs, myrank, lunit, ncid, n
+ integer :: ierr, nprocs, myrank, my_global_rank, lunit, ncid, n, ntiles, ens_size
+ integer :: ntiles, ens_size, ie 
+ character(len=3) :: ens_str
  logical :: file_exists
 
  ! restart variables that apply to full grid cell 
@@ -35,21 +37,24 @@
  endtype 
  type(grid_type) :: grid_state
 
- character(len=512) :: orog_path, rst_path, inc_path
+ character(len=512) :: orog_path, rst_path_full, inc_path_full
+ character(len=256) :: rst_path, inc_path
  character*20       :: otype ! orography filename stub. For atm only, oro_C${RES}, for atm/ocean oro_C${RES}.mx100
 
- namelist /noahmp_snow/ date_str, hour_str, res, frac_grid, rst_path, inc_path, orog_path, otype
+ namelist /noahmp_snow/ date_str, hour_str, res, frac_grid, rst_path, inc_path, orog_path, otype, ntiles, ens_size
 !
     call mpi_init(ierr)
     call mpi_comm_size(mpi_comm_world, nprocs, ierr)
-    call mpi_comm_rank(mpi_comm_world, myrank, ierr)
+    call mpi_comm_rank(mpi_comm_world, my_global_rank, ierr)
 
     print*
-    print*,"starting apply_incr_noahmp_snow program on rank ", myrank
+    print*,"starting apply_incr_noahmp_snow program on rank ", my_global_rank
 
     ! SET NAMELIST DEFAULTS
     rst_path = '.'
     inc_path = '.'
+    ntiles = 6
+    ens_size = 1
     ! READ NAMELIST 
 
     inquire (file='apply_incr_nml', exist=file_exists) 
@@ -78,79 +83,92 @@
         grid_state%name_swe =           'sheleg    '
     endif
 
+    do irank=my_global_rank, ntiles*ens_size, nprocs
+        ie = irank/ntiles    !/ Np_til  ! sub array length per proc
+        myrank = MOD(irank, ntiles)  !LENSFC - N_sA * Np_til ! extra grid cells
 
-    ! GET MAPPING INDEX (see subroutine comments re: source of land/sea mask)
+        write(ens_str, '(I3.3)') (ie+1)
 
-    call get_fv3_mapping(myrank, date_str, hour_str, res, len_land_vec, frac_grid, tile2vector)
-  
-    ! SET-UP THE NOAH-MP STATE  AND INCREMENT
+        rst_path_full = trim(rst_path)//"/mem"//ens_str//"/"
+        inc_path_full = trim(inc_path)//"/mem"//ens_str//"/"
 
-    allocate(noahmp_state%swe                (len_land_vec)) ! values over land only
-    allocate(noahmp_state%snow_depth         (len_land_vec)) ! values over land only 
-    allocate(noahmp_state%active_snow_layers (len_land_vec)) 
-    allocate(noahmp_state%swe_previous       (len_land_vec))
-    allocate(noahmp_state%snow_soil_interface(len_land_vec,7))
-    allocate(noahmp_state%temperature_snow   (len_land_vec,3))
-    allocate(noahmp_state%snow_ice_layer     (len_land_vec,3))
-    allocate(noahmp_state%snow_liq_layer     (len_land_vec,3))
-    allocate(noahmp_state%temperature_soil   (len_land_vec))
-    allocate(increment   (len_land_vec)) ! increment to snow depth over land
+        print*
+        print*,"apply_incr_noahmp_snow ensemble member ", ie+1, " tile ", myrank+1, " on proc " my_global_rank
 
-    if (frac_grid) then
-        allocate(grid_state%land_frac          (len_land_vec)) 
-        allocate(grid_state%swe                (len_land_vec)) ! values over full grid
-        allocate(grid_state%snow_depth         (len_land_vec)) ! values over full grid
-        allocate(swe_back                      (len_land_vec)) ! save background 
-        allocate(snow_depth_back               (len_land_vec)) !
-    endif
+        ! GET MAPPING INDEX (see subroutine comments re: source of land/sea mask)
 
-    ! READ RESTART FILE 
+        call get_fv3_mapping(myrank, rst_path_full, date_str, hour_str, res, len_land_vec, frac_grid, tile2vector)
+    
+        ! SET-UP THE NOAH-MP STATE  AND INCREMENT
 
-    call   read_fv3_restart(myrank, rst_path, date_str, hour_str, res, ncid, & 
-                len_land_vec, tile2vector, frac_grid, noahmp_state, grid_state)
+        allocate(noahmp_state%swe                (len_land_vec)) ! values over land only
+        allocate(noahmp_state%snow_depth         (len_land_vec)) ! values over land only 
+        allocate(noahmp_state%active_snow_layers (len_land_vec)) 
+        allocate(noahmp_state%swe_previous       (len_land_vec))
+        allocate(noahmp_state%snow_soil_interface(len_land_vec,7))
+        allocate(noahmp_state%temperature_snow   (len_land_vec,3))
+        allocate(noahmp_state%snow_ice_layer     (len_land_vec,3))
+        allocate(noahmp_state%snow_liq_layer     (len_land_vec,3))
+        allocate(noahmp_state%temperature_soil   (len_land_vec))
+        allocate(increment   (len_land_vec)) ! increment to snow depth over land
 
-    ! READ SNOW DEPTH INCREMENT
+        if (frac_grid) then
+            allocate(grid_state%land_frac          (len_land_vec)) 
+            allocate(grid_state%swe                (len_land_vec)) ! values over full grid
+            allocate(grid_state%snow_depth         (len_land_vec)) ! values over full grid
+            allocate(swe_back                      (len_land_vec)) ! save background 
+            allocate(snow_depth_back               (len_land_vec)) !
+        endif
 
-    call   read_fv3_increment(myrank, inc_path, date_str, hour_str, res, &
-                len_land_vec, tile2vector, noahmp_state%name_snow_depth, increment)
- 
-    if (frac_grid) then ! save background
-        swe_back = noahmp_state%swe
-        snow_depth_back = noahmp_state%snow_depth
-    endif 
+        ! READ RESTART FILE 
 
-    ! ADJUST THE SNOW STATES OVER LAND
+        call   read_fv3_restart(myrank, rst_path_full, date_str, hour_str, res, ncid, & 
+                    len_land_vec, tile2vector, frac_grid, noahmp_state, grid_state)
 
-    call UpdateAllLayers(len_land_vec, increment, noahmp_state)
+        ! READ SNOW DEPTH INCREMENT
 
-    ! IF FRAC GRID, ADJUST SNOW STATES OVER GRID CELL
+        call   read_fv3_increment(myrank, inc_path_full, date_str, hour_str, res, &
+                    len_land_vec, tile2vector, noahmp_state%name_snow_depth, increment)
+    
+        if (frac_grid) then ! save background
+            swe_back = noahmp_state%swe
+            snow_depth_back = noahmp_state%snow_depth
+        endif 
 
-    if (frac_grid) then
+        ! ADJUST THE SNOW STATES OVER LAND
 
-        ! get the land frac 
-         call  read_fv3_orog(myrank, res, orog_path, otype, len_land_vec, tile2vector, & 
-                grid_state)
+        call UpdateAllLayers(len_land_vec, increment, noahmp_state)
 
-         do n=1,len_land_vec 
-                grid_state%swe(n) = grid_state%swe(n) + & 
-                                grid_state%land_frac(n)* ( noahmp_state%swe(n) - swe_back(n)) 
-                grid_state%snow_depth(n) = grid_state%snow_depth(n) + & 
-                                grid_state%land_frac(n)* ( noahmp_state%snow_depth(n) - snow_depth_back(n)) 
-         enddo
+        ! IF FRAC GRID, ADJUST SNOW STATES OVER GRID CELL
 
+        if (frac_grid) then
 
-    endif
+            ! get the land frac 
+            call  read_fv3_orog(myrank, res, orog_path, otype, len_land_vec, tile2vector, & 
+                    grid_state)
 
-    ! WRITE OUT ADJUSTED RESTART
-
-    call   write_fv3_restart(noahmp_state, grid_state, res, ncid, len_land_vec, & 
-                frac_grid, tile2vector) 
+            do n=1,len_land_vec 
+                    grid_state%swe(n) = grid_state%swe(n) + & 
+                                    grid_state%land_frac(n)* ( noahmp_state%swe(n) - swe_back(n)) 
+                    grid_state%snow_depth(n) = grid_state%snow_depth(n) + & 
+                                    grid_state%land_frac(n)* ( noahmp_state%snow_depth(n) - snow_depth_back(n)) 
+            enddo
 
 
-    ! CLOSE RESTART FILE 
-    print*
-    print*,"closing restart, apply_incr_noahmp_snow program on rank ", myrank
-    ierr = nf90_close(ncid)
+        endif
+
+        ! WRITE OUT ADJUSTED RESTART
+
+        call   write_fv3_restart(noahmp_state, grid_state, res, ncid, len_land_vec, & 
+                    frac_grid, tile2vector) 
+
+
+        ! CLOSE RESTART FILE 
+        print*
+        print*,"closing restart, apply_incr_noahmp_snow ensemble member ", ie+1, " tile ", myrank+1, " on proc " my_global_rank
+        ierr = nf90_close(ncid)
+
+    enddo
 
     call mpi_finalize(ierr)
 
@@ -195,7 +213,7 @@
 !       land_frac field from the oro_grid files.
 !--------------------------------------------------------------
 
- subroutine get_fv3_mapping(myrank, date_str, hour_str, res, & 
+ subroutine get_fv3_mapping(myrank, rst_path, date_str, hour_str, res, & 
                 len_land_vec, frac_grid, tile2vector)
 
  implicit none 
@@ -203,6 +221,7 @@
  include 'mpif.h'
 
  integer, intent(in) :: myrank, res
+ character(len=512), intent(in) :: rst_path
  character(len=8), intent(in) :: date_str 
  character(len=2), intent(in) :: hour_str 
  logical, intent(in) :: frac_grid
