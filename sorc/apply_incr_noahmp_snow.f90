@@ -174,7 +174,7 @@
         ierr = nf90_close(ncid)
         
         ! Deallocate. These are required incase a single process loops through multiple tiles     
-        if allocated(tile2vector) deallocate(tile2vector)   
+        if (allocated(tile2vector)) deallocate(tile2vector)   
         deallocate(noahmp_state%swe) ! values over land only
         deallocate(noahmp_state%snow_depth) ! values over land only 
         deallocate(noahmp_state%active_snow_layers) 
