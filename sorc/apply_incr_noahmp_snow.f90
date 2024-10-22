@@ -89,8 +89,14 @@
 
         write(ens_str, '(I3.3)') (ie+1)
 
-        rst_path_full = trim(rst_path)//"/mem"//ens_str//"/"
-        inc_path_full = trim(inc_path)//"/mem"//ens_str//"/"
+!TODO: we might just keep the default for ens_size=1
+        if(ens_size.eq.1) then 
+            rst_path_full = trim(rst_path)//"/mem000/"
+            inc_path_full = trim(inc_path)//"/mem000/"
+        else
+            rst_path_full = trim(rst_path)//"/mem"//ens_str//"/"
+            inc_path_full = trim(inc_path)//"/mem"//ens_str//"/"
+        endif
 
         print*
         print*,"apply_incr_noahmp_snow ensemble member ", ie+1, " tile ", myrank+1, " on proc " my_global_rank
@@ -100,7 +106,8 @@
         call get_fv3_mapping(myrank, rst_path_full, date_str, hour_str, res, len_land_vec, frac_grid, tile2vector)
     
         ! SET-UP THE NOAH-MP STATE  AND INCREMENT
-
+        
+        ! The allocations are inside the loop because different ensemble members could have different len_land_vec
         allocate(noahmp_state%swe                (len_land_vec)) ! values over land only
         allocate(noahmp_state%snow_depth         (len_land_vec)) ! values over land only 
         allocate(noahmp_state%active_snow_layers (len_land_vec)) 
@@ -154,7 +161,6 @@
                                     grid_state%land_frac(n)* ( noahmp_state%snow_depth(n) - snow_depth_back(n)) 
             enddo
 
-
         endif
 
         ! WRITE OUT ADJUSTED RESTART
@@ -162,14 +168,32 @@
         call   write_fv3_restart(noahmp_state, grid_state, res, ncid, len_land_vec, & 
                     frac_grid, tile2vector) 
 
-
         ! CLOSE RESTART FILE 
         print*
         print*,"closing restart, apply_incr_noahmp_snow ensemble member ", ie+1, " tile ", myrank+1, " on proc " my_global_rank
         ierr = nf90_close(ncid)
+        
+        ! Deallocate. These are required incase a single process loops through multiple tiles        
+        deallocate(noahmp_state%swe) ! values over land only
+        deallocate(noahmp_state%snow_depth) ! values over land only 
+        deallocate(noahmp_state%active_snow_layers) 
+        deallocate(noahmp_state%swe_previous)
+        deallocate(noahmp_state%snow_soil_interface)
+        deallocate(noahmp_state%temperature_snow)
+        deallocate(noahmp_state%snow_ice_layer)
+        deallocate(noahmp_state%snow_liq_layer)
+        deallocate(noahmp_state%temperature_soil)
+        deallocate(increment) ! increment to snow depth over land
+
+        if (frac_grid) then
+            deallocate(grid_state%land_frac) 
+            deallocate(grid_state%swe) ! values over full grid
+            deallocate(grid_state%snow_depth) ! values over full grid
+            deallocate(swe_back) ! save background 
+            deallocate(snow_depth_back) !
+        endif
 
     enddo
-
     call mpi_finalize(ierr)
 
  contains 
