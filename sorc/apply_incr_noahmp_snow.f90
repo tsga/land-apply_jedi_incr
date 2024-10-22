@@ -51,8 +51,8 @@
     print*,"starting apply_incr_noahmp_snow program on rank ", my_global_rank
 
     ! SET NAMELIST DEFAULTS
-    rst_path = '.'
-    inc_path = '.'
+    rst_path = './'
+    inc_path = './'
     ntiles = 6
     ens_size = 1
     ! READ NAMELIST 
@@ -89,13 +89,13 @@
 
         write(ens_str, '(I3.3)') (ie+1)
 
-!TODO: we might just keep the default for ens_size=1
-        if(ens_size.eq.1) then 
-            rst_path_full = trim(rst_path)//"/mem000/"
-            inc_path_full = trim(inc_path)//"/mem000/"
-        else
+!TBCL: keep the default for ens_size=1
+        if(ens_size > 1) then 
             rst_path_full = trim(rst_path)//"/mem"//ens_str//"/"
             inc_path_full = trim(inc_path)//"/mem"//ens_str//"/"
+        else
+            rst_path_full = trim(rst_path)      !//"/mem000/"
+            inc_path_full = trim(inc_path)      !//"/mem000/"
         endif
 
         print*
