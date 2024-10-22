@@ -21,7 +21,7 @@
  double precision, allocatable :: swe_back(:) 
  double precision, allocatable :: snow_depth_back(:) 
 
- integer :: ierr, nprocs, myrank, my_global_rank, lunit, ncid, n
+ integer :: ierr, irank, nprocs, myrank, my_global_rank, lunit, ncid, n
  integer :: ntiles, ens_size, ie 
  character(len=3) :: ens_str
  logical :: file_exists
@@ -99,7 +99,7 @@
         endif
 
         print*
-        print*,"apply_incr_noahmp_snow ensemble member ", ie+1, " tile ", myrank+1, " on proc " my_global_rank
+        print*,"apply_incr_noahmp_snow ensemble member ", ie+1, " tile ", myrank+1, " on proc ", my_global_rank
 
         ! GET MAPPING INDEX (see subroutine comments re: source of land/sea mask)
 
@@ -170,7 +170,7 @@
 
         ! CLOSE RESTART FILE 
         print*
-        print*,"closing restart, apply_incr_noahmp_snow ensemble member ", ie+1, " tile ", myrank+1, " on proc " my_global_rank
+        print*,"closing restart, apply_incr_noahmp_snow ensemble member ", ie+1, " tile ", myrank+1, " on proc ", my_global_rank
         ierr = nf90_close(ncid)
         
         ! Deallocate. These are required incase a single process loops through multiple tiles        
