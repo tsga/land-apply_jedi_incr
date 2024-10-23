@@ -202,7 +202,12 @@
             deallocate(snow_depth_back) !
         endif
 
+        print*
+        print*, "finisheed loop proc ", myrank, " ensemble member ", ens_mem, " tile ", tile_num
+
     enddo
+    
+    print*, "finisheed apply_incr_noahmp_snow on proc ", myrank
     call mpi_finalize(ierr)
 
  contains 
