@@ -51,7 +51,7 @@
     call mpi_comm_rank(mpi_comm_world, myrank, ierr)
 
     print*
-    print*,"starting apply_incr_noahmp_snow program on rank ", myrank
+    print*,"starting apply_incr_noahmp_snow program on rank ", myrank, ' of ', nprocs, ' procs'
 
     ! SET NAMELIST DEFAULTS
     rst_path = './'
@@ -69,9 +69,10 @@
 
     open (action='read', file='apply_incr_nml', iostat=ierr, newunit=lunit)
     read (nml=noahmp_snow, iostat=ierr, unit=lunit)
-    !if (myrank==0) then
+    if (myrank==0) then
     !    write (6, noahmp_snow)
-    !end if
+        print*, 'ens_size ', ens_size, ' num_tiles ', num_tiles
+    end if
 
     ! SET VARIABLE NAMES FOR SNOW OVER LAND AND GRID
     if (frac_grid) then 
