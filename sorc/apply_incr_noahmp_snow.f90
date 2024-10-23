@@ -21,8 +21,8 @@
  double precision, allocatable :: swe_back(:) 
  double precision, allocatable :: snow_depth_back(:) 
 
- integer :: ierr, irank, nprocs, myrank, my_global_rank, lunit, ncid, n
- integer :: ntiles, ens_size, ie 
+ integer :: ierr, irank, nprocs, myrank, lunit, ncid, n
+ integer :: ntiles, ens_size, ens_mem, tile_num
  character(len=3) :: ens_str
  logical :: file_exists
 
@@ -41,14 +41,17 @@
  character(len=256) :: rst_path, inc_path
  character*20       :: otype ! orography filename stub. For atm only, oro_C${RES}, for atm/ocean oro_C${RES}.mx100
 
+ character(len=512) :: restart_file
+ character(len=1)   :: tilech
+
  namelist /noahmp_snow/ date_str, hour_str, res, frac_grid, rst_path, inc_path, orog_path, otype, ntiles, ens_size
 !
     call mpi_init(ierr)
     call mpi_comm_size(mpi_comm_world, nprocs, ierr)
-    call mpi_comm_rank(mpi_comm_world, my_global_rank, ierr)
+    call mpi_comm_rank(mpi_comm_world, myrank, ierr)
 
     print*
-    print*,"starting apply_incr_noahmp_snow program on rank ", my_global_rank
+    print*,"starting apply_incr_noahmp_snow program on rank ", myrank
 
     ! SET NAMELIST DEFAULTS
     rst_path = './'
@@ -83,11 +86,11 @@
         grid_state%name_swe =           'sheleg    '
     endif
 
-    do irank=my_global_rank, ntiles*ens_size, nprocs
-        ie = irank/ntiles    
-        myrank = MOD(irank, ntiles)  
+    do irank=myrank, ntiles*ens_size - 1, nprocs
+        ens_mem = irank/ntiles + 1            !ensemble member
+        tile_num = MOD(irank, ntiles) + 1      !tile number
 
-        write(ens_str, '(I3.3)') (ie+1)
+        write(ens_str, '(I3.3)') ens_mem
 
 !TBCL: keep the default for ens_size=1
         if(ens_size > 1) then 
@@ -99,11 +102,11 @@
         endif
 
         print*
-        print*,"apply_incr_noahmp_snow ensemble member ", ie+1, " tile ", myrank+1, " on proc ", my_global_rank
+        print*, "apply_incr_noahmp_snow on proc ", myrank, " ensemble member ", ens_mem, " tile ", tile_num
 
         ! GET MAPPING INDEX (see subroutine comments re: source of land/sea mask)
 
-        call get_fv3_mapping(myrank, rst_path_full, date_str, hour_str, res, len_land_vec, frac_grid, tile2vector)
+        call get_fv3_mapping(myrank, ens_mem, tile_num, rst_path_full, date_str, hour_str, res, len_land_vec, frac_grid, tile2vector)
     
         ! SET-UP THE NOAH-MP STATE  AND INCREMENT
         
@@ -128,13 +131,15 @@
         endif
 
         ! READ RESTART FILE 
+        write(tilech, '(i1.1)') (tile_num)
+        restart_file = trim(rst_path_full)//"/"//date_str//"."//hour_str//"0000.sfc_data.tile"//tilech//".nc"
 
-        call   read_fv3_restart(myrank, rst_path_full, date_str, hour_str, res, ncid, & 
+        call   read_fv3_restart(trim(restart_file), res, ncid, &          !tile_num, rst_path_full, date_str, hour_str, 
                     len_land_vec, tile2vector, frac_grid, noahmp_state, grid_state)
 
         ! READ SNOW DEPTH INCREMENT
 
-        call   read_fv3_increment(myrank, inc_path_full, date_str, hour_str, res, &
+        call   read_fv3_increment(tile_num, inc_path_full, date_str, hour_str, res, &
                     len_land_vec, tile2vector, noahmp_state%name_snow_depth, increment)
     
         if (frac_grid) then ! save background
@@ -144,6 +149,7 @@
 
         ! ADJUST THE SNOW STATES OVER LAND
 
+!TBCL: return and check error code from this call (for now assume it is well handled inside function)
         call UpdateAllLayers(len_land_vec, increment, noahmp_state)
 
         ! IF FRAC GRID, ADJUST SNOW STATES OVER GRID CELL
@@ -151,7 +157,7 @@
         if (frac_grid) then
 
             ! get the land frac 
-            call  read_fv3_orog(myrank, res, orog_path, otype, len_land_vec, tile2vector, & 
+            call  read_fv3_orog(tile_num, res, orog_path, otype, len_land_vec, tile2vector, & 
                     grid_state)
 
             do n=1,len_land_vec 
@@ -165,15 +171,16 @@
 
         ! WRITE OUT ADJUSTED RESTART
 
-        call   write_fv3_restart(noahmp_state, grid_state, res, ncid, len_land_vec, & 
+        call   write_fv3_restart(trim(restart_file), noahmp_state, grid_state, res, ncid, len_land_vec, & 
                     frac_grid, tile2vector) 
 
         ! CLOSE RESTART FILE 
         print*
-        print*,"closing restart, apply_incr_noahmp_snow ensemble member ", ie+1, " tile ", myrank+1, " on proc ", my_global_rank
+        print*,"apply_incr_noahmp_snow, closing restart on proc ", myrank, " ensemble member ", ens_mem, " tile ", tile_num
         ierr = nf90_close(ncid)
+        call netcdf_err( ierr, "closing restart file "//trim(restart_file) )
         
-        ! Deallocate. These are required incase a single process loops through multiple tiles     
+        ! Deallocate. These are required incase a single process loops through multiple tiles with different mapping     
         if (allocated(tile2vector)) deallocate(tile2vector)   
         deallocate(noahmp_state%swe) ! values over land only
         deallocate(noahmp_state%snow_depth) ! values over land only 
@@ -238,15 +245,15 @@
 !       land_frac field from the oro_grid files.
 !--------------------------------------------------------------
 
- subroutine get_fv3_mapping(myrank, rst_path, date_str, hour_str, res, & 
+ subroutine get_fv3_mapping(myrank, ens_mem, tile_num, rst_path, date_str, hour_str, res, & 
                 len_land_vec, frac_grid, tile2vector)
 
  implicit none 
 
  include 'mpif.h'
 
- integer, intent(in) :: myrank, res
- character(len=512), intent(in) :: rst_path
+ integer, intent(in) :: myrank, ens_mem, tile_num, res
+ character(len=*), intent(in) :: rst_path
  character(len=8), intent(in) :: date_str 
  character(len=2), intent(in) :: hour_str 
  logical, intent(in) :: frac_grid
@@ -266,7 +273,7 @@
  integer :: i, j, nn
 
     ! OPEN FILE
-    write(rankch, '(i1.1)') (myrank+1)
+    write(rankch, '(i1.1)') (tile_num)
     restart_file = trim(rst_path)//"/"//date_str//"."//hour_str//"0000.sfc_data.tile"//rankch//".nc"
 
     inquire(file=trim(restart_file), exist=file_exists)
@@ -328,7 +335,7 @@
         enddo 
     enddo
     
-    write(6,*) 'Number of land points on rank ', myrank, ' :',  len_land_vec
+    write(6,*) 'Number of land points on proc ', myrank, 'ensmem ', ens_mem, ' tilenum ', tile_num, ' :',  len_land_vec
 
     allocate(tile2vector(len_land_vec,2)) 
 
@@ -350,17 +357,17 @@ end subroutine get_fv3_mapping
 ! open fv3 restart, and read in required variables
 ! file is opened as read/write and remains open
 !--------------------------------------------------------------
- subroutine read_fv3_restart(myrank, rst_path, date_str, hour_str, res, ncid, & 
+ subroutine read_fv3_restart(restart_file, res, ncid, &                      !tile_num, rst_path, date_str, hour_str, 
                 len_land_vec,tile2vector, frac_grid, noahmp_state, grid_state)
 
  implicit none 
 
  include 'mpif.h'
 
- integer, intent(in) :: myrank, res, len_land_vec
- character(len=512), intent(in) :: rst_path
- character(len=8), intent(in) :: date_str 
- character(len=2), intent(in) :: hour_str 
+ integer, intent(in) :: res, len_land_vec   !tile_num, 
+ character(len=*), intent(in) :: restart_file  !rst_path
+!  character(len=8), intent(in) :: date_str 
+!  character(len=2), intent(in) :: hour_str 
  integer, intent(in) :: tile2vector(len_land_vec,2)
  logical, intent(in) :: frac_grid
 
@@ -368,15 +375,13 @@ end subroutine get_fv3_mapping
  type(noahmp_type), intent(inout)  :: noahmp_state
  type(grid_type), intent(inout)  :: grid_state
 
- character(len=512) :: restart_file
- character(len=1) :: rankch
+!  character(len=512) :: restart_file
+!  character(len=1) :: rankch
  logical :: file_exists
  integer :: ierr, id_dim, fres
  integer :: nn
 
     ! OPEN FILE
-    write(rankch, '(i1.1)') (myrank+1)
-    restart_file = trim(rst_path)//"/"//date_str//"."//hour_str//"0000.sfc_data.tile"//rankch//".nc"
 
     inquire(file=trim(restart_file), exist=file_exists)
 
@@ -393,59 +398,61 @@ end subroutine get_fv3_mapping
 
     ! CHECK DIMENSIONS
     ierr=nf90_inq_dimid(ncid, 'xaxis_1', id_dim)
-    call netcdf_err(ierr, 'reading xaxis_1' )
+    call netcdf_err(ierr, 'reading xaxis_1 in '//trim(restart_file) )
     ierr=nf90_inquire_dimension(ncid,id_dim,len=fres)
-    call netcdf_err(ierr, 'reading xaxis_1' )
+    call netcdf_err(ierr, 'reading xaxis_1 in '//trim(restart_file) )
 
     if ( fres /= res) then
-       print*,'fatal error: dimensions wrong.'
+       print*,'fatal error: dimensions wrong in '//trim(restart_file)
        call mpi_abort(mpi_comm_world, ierr)
     endif
 
    ! read swe over land (file name: sheleg, vert dim 1) 
-    call read_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+    ! this call has file name added for inspection. 
+    !In case of failure, filename has all info about proc rank, ens member, and tile number
+    call read_nc_var2D(ncid, trim(restart_file), len_land_vec, res, tile2vector, 0, & 
                         noahmp_state%name_swe, noahmp_state%swe)
 
     ! read snow_depth over land (file name: snwdph, vert dim 1)
-    call read_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+    call read_nc_var2D(ncid, trim(restart_file), len_land_vec, res, tile2vector, 0, & 
                         noahmp_state%name_snow_depth, noahmp_state%snow_depth)
 
    if (frac_grid) then 
        ! read swe over grid cell  (file name: sheleg, vert dim 1) 
-        call read_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+        call read_nc_var2D(ncid, trim(restart_file), len_land_vec, res, tile2vector, 0, & 
                             grid_state%name_swe, grid_state%swe)
 
         ! read snow_depth  over grid cell (file name: snwdph, vert dim 1)
-        call read_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+        call read_nc_var2D(ncid, trim(restart_file), len_land_vec, res, tile2vector, 0, & 
                             grid_state%name_snow_depth, grid_state%snow_depth)
     endif
 
     ! read active_snow_layers (file name: snowxy, vert dim: 1) 
-    call read_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+    call read_nc_var2D(ncid, trim(restart_file), len_land_vec, res, tile2vector, 0, & 
                         'snowxy    ', noahmp_state%active_snow_layers)
 
     ! read swe_previous (file name: sneqvoxy, vert dim: 1) 
-    call read_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+    call read_nc_var2D(ncid, trim(restart_file), len_land_vec, res, tile2vector, 0, & 
                         'sneqvoxy  ', noahmp_state%swe_previous)
 
     ! read snow_soil_interface (file name: zsnsoxy, vert dim: 7) 
-    call read_nc_var3D(ncid, len_land_vec, res, 7,  tile2vector, & 
+    call read_nc_var3D(ncid, trim(restart_file), len_land_vec, res, 7,  tile2vector, & 
                         'zsnsoxy   ', noahmp_state%snow_soil_interface)
 
     ! read temperature_snow (file name: tsnoxy, vert dim: 3) 
-    call read_nc_var3D(ncid, len_land_vec, res, 3, tile2vector, & 
+    call read_nc_var3D(ncid, trim(restart_file), len_land_vec, res, 3, tile2vector, & 
                         'tsnoxy    ', noahmp_state%temperature_snow)
 
     ! read snow_ice_layer (file name:  snicexy, vert dim: 3) 
-    call read_nc_var3D(ncid, len_land_vec, res, 3, tile2vector, & 
+    call read_nc_var3D(ncid, trim(restart_file), len_land_vec, res, 3, tile2vector, & 
                         'snicexy    ', noahmp_state%snow_ice_layer)
 
     ! read snow_liq_layer (file name: snliqxy, vert dim: 3) 
-    call read_nc_var3D(ncid, len_land_vec, res, 3, tile2vector, & 
+    call read_nc_var3D(ncid, trim(restart_file), len_land_vec, res, 3, tile2vector, & 
                         'snliqxy   ', noahmp_state%snow_liq_layer)
 
     ! read temperature_soil (file name: stc, use layer 1 only, vert dim: 1) 
-    call read_nc_var2D(ncid, len_land_vec, res, tile2vector, 4, & 
+    call read_nc_var2D(ncid, trim(restart_file), len_land_vec, res, tile2vector, 4, & 
                         'stc       ', noahmp_state%temperature_soil)
 
 end subroutine read_fv3_restart
@@ -454,15 +461,15 @@ end subroutine read_fv3_restart
 !--------------------------------------------------------------
 ! open fv3 orography file, and read in land fraction
 !--------------------------------------------------------------
- subroutine read_fv3_orog(myrank, res, orog_path, otype, len_land_vec, tile2vector, & 
+ subroutine read_fv3_orog(tile_num, res, orog_path, otype, len_land_vec, tile2vector, & 
                 grid_state)
 
  implicit none 
 
  include 'mpif.h'
 
- integer, intent(in) :: myrank, res, len_land_vec
- character(len=512), intent(in)  :: orog_path
+ integer, intent(in) :: tile_num, res, len_land_vec
+ character(len=*), intent(in)    :: orog_path
  character(len=20), intent(in)   :: otype
  integer, intent(in) :: tile2vector(len_land_vec,2)
  type(grid_type), intent(inout) :: grid_state
@@ -473,7 +480,7 @@ end subroutine read_fv3_restart
  integer :: ncid, id_dim, id_var, ierr, fres
 
     ! OPEN FILE
-    write(rankch, '(i1.1)') (myrank+1)
+    write(rankch, '(i1.1)') (tile_num)
     filename =trim(orog_path)//"/"//trim(otype)//".tile"//rankch//".nc"
 
     inquire(file=trim(filename), exist=file_exists)
@@ -491,17 +498,17 @@ end subroutine read_fv3_restart
 
     ! CHECK DIMENSIONS
     ierr=nf90_inq_dimid(ncid, 'lon', id_dim)
-    call netcdf_err(ierr, 'reading lon' )
+    call netcdf_err(ierr, 'reading lon id from '//trim(filename) )
     ierr=nf90_inquire_dimension(ncid,id_dim,len=fres)
-    call netcdf_err(ierr, 'reading lon' )
+    call netcdf_err(ierr, 'reading lon from '//trim(filename) )
 
     if ( fres /= res) then
-       print*,'fatal error: dimensions wrong.'
+       print*,'fatal error: dimensions wrong in file '//trim(filename)
        call mpi_abort(mpi_comm_world, ierr)
     endif
 
    ! read swe over grid cell  (file name: sheleg, vert dim 1) 
-    call read_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+    call read_nc_var2D(ncid, trim(filename), len_land_vec, res, tile2vector, 0, & 
                         'land_frac  ', grid_state%land_frac)
 
     ! close file 
@@ -516,15 +523,15 @@ end subroutine read_fv3_orog
 !  read in snow depth increment from jedi increment file
 !  file format is same as restart file
 !--------------------------------------------------------------
- subroutine read_fv3_increment(myrank, inc_path, date_str, hour_str, res, & 
+ subroutine read_fv3_increment(tile_num, inc_path, date_str, hour_str, res, & 
                 len_land_vec,tile2vector, control_var, increment)
 
  implicit none 
 
  include 'mpif.h'
 
- integer, intent(in) :: myrank, res, len_land_vec
- character(len=512), intent(in) :: inc_path
+ integer, intent(in) :: tile_num, res, len_land_vec
+ character(len=*), intent(in) :: inc_path
  character(len=8), intent(in) :: date_str 
  character(len=2), intent(in) :: hour_str 
  integer, intent(in) :: tile2vector(len_land_vec,2)
@@ -541,7 +548,7 @@ end subroutine read_fv3_orog
 
  
     ! OPEN FILE
-    write(rankch, '(i1.1)') (myrank+1)
+    write(rankch, '(i1.1)') (tile_num)
     incr_file = trim(inc_path)//"/"//"snowinc."//date_str//"."//hour_str//"0000.sfc_data.tile"//rankch//".nc"
 
     inquire(file=trim(incr_file), exist=file_exists)
@@ -559,17 +566,17 @@ end subroutine read_fv3_orog
 
     ! CHECK DIMENSIONS
     ierr=nf90_inq_dimid(ncid, 'xaxis_1', id_dim)
-    call netcdf_err(ierr, 'reading xaxis_1' )
+    call netcdf_err(ierr, 'reading xaxis_1 '//trim(incr_file) )
     ierr=nf90_inquire_dimension(ncid,id_dim,len=fres)
-    call netcdf_err(ierr, 'reading xaxis_1' )
+    call netcdf_err(ierr, 'reading xaxis_1 '//trim(incr_file) )
 
     if ( fres /= res) then
-       print*,'fatal error: dimensions wrong.'
+       print*,'fatal error: dimension fres ',fres, ' in '//trim(incr_file), ' not equal to res ',res
        call mpi_abort(mpi_comm_world, ierr)
     endif
 
     ! read snow_depth (file name: snwdph, vert dim 1)
-    call read_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+    call read_nc_var2D(ncid, trim(incr_file), len_land_vec, res, tile2vector, 0, & 
                         control_var, increment)
 
     ! close file 
@@ -585,10 +592,12 @@ end subroutine  read_fv3_increment
 ! and save to noahmp vector
 !--------------------------------------------------------
 
-subroutine read_nc_var2D(ncid, len_land_vec, res, tile2vector, in3D_vdim,  & 
+subroutine read_nc_var2D(ncid, file_name, len_land_vec, res, tile2vector, in3D_vdim,  & 
                          var_name, data_vec)
 
     integer, intent(in)             :: ncid, len_land_vec, res 
+    ! file name added for inspection. In case of failure, filename has all info about proc rank, ens member, and tile number
+    character(len=*), intent(in)    :: file_name  
     character(len=10), intent(in)   :: var_name
     integer, intent(in)             :: tile2vector(len_land_vec,2)
     integer, intent(in)             :: in3D_vdim ! 0 - input is 2D, 
@@ -600,14 +609,14 @@ subroutine read_nc_var2D(ncid, len_land_vec, res, tile2vector, in3D_vdim,  &
     integer          :: nn, ierr, id_var
 
     ierr=nf90_inq_varid(ncid, trim(var_name), id_var)
-    call netcdf_err(ierr, 'reading '//var_name//' id' )
+    call netcdf_err(ierr, 'reading '//var_name//' id in '//trim(file_name) )
     if (in3D_vdim==0) then
         ierr=nf90_get_var(ncid, id_var, dummy2D)
-        call netcdf_err(ierr, 'reading '//var_name//' data' )
+        call netcdf_err(ierr, 'reading '//var_name//' data in '//trim(file_name) )
     else  ! special case for reading in 3D variable, and retaining only 
           ! level 1
         ierr=nf90_get_var(ncid, id_var, dummy3D)
-        call netcdf_err(ierr, 'reading '//var_name//' data' )
+        call netcdf_err(ierr, 'reading '//var_name//' data in '//trim(file_name) )
         dummy2D=dummy3D(:,:,1) 
     endif
 
@@ -622,10 +631,11 @@ end subroutine read_nc_var2D
 ! and save to noahmp vector
 !--------------------------------------------------------
 
-subroutine read_nc_var3D(ncid, len_land_vec, res, vdim,  & 
+subroutine read_nc_var3D(ncid, file_name, len_land_vec, res, vdim,  & 
                 tile2vector, var_name, data_vec)
 
     integer, intent(in)             :: ncid, len_land_vec, res, vdim
+    character(len=*), intent(in)    :: file_name
     character(len=10), intent(in)   :: var_name
     integer, intent(in)             :: tile2vector(len_land_vec,2)
     double precision, intent(out)   :: data_vec(len_land_vec, vdim)
@@ -634,9 +644,9 @@ subroutine read_nc_var3D(ncid, len_land_vec, res, vdim,  &
     integer          :: nn, ierr, id_var
 
     ierr=nf90_inq_varid(ncid, trim(var_name), id_var)
-    call netcdf_err(ierr, 'reading '//var_name//' id' )
+    call netcdf_err(ierr, 'reading '//var_name//' id in '//trim(file_name) )
     ierr=nf90_get_var(ncid, id_var, dummy3D)
-    call netcdf_err(ierr, 'reading '//var_name//' data' )
+    call netcdf_err(ierr, 'reading '//var_name//' data in '//trim(file_name) )
 
     do nn=1,len_land_vec 
         data_vec(nn,:) = dummy3D(tile2vector(nn,1), tile2vector(nn,2), :) 
@@ -647,12 +657,13 @@ end subroutine read_nc_var3D
 !--------------------------------------------------------------
 ! write updated fields tofv3_restarts  open on ncid
 !--------------------------------------------------------------
- subroutine write_fv3_restart(noahmp_state, grid_state, res, ncid, len_land_vec, &
+ subroutine write_fv3_restart(file_name, noahmp_state, grid_state, res, ncid, len_land_vec, &
                  frac_grid, tile2vector) 
 
  implicit none 
 
  integer, intent(in) :: ncid, res, len_land_vec
+ character(len=*), intent(in)    :: file_name
  type(noahmp_type), intent(in) :: noahmp_state
  type(grid_type), intent(in) :: grid_state
  logical, intent(in) :: frac_grid
@@ -660,49 +671,49 @@ end subroutine read_nc_var3D
 
  
    ! write swe over land (file name: sheleg, vert dim 1) 
-    call write_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+    call write_nc_var2D(ncid, trim(file_name), len_land_vec, res, tile2vector, 0, & 
                         noahmp_state%name_swe, noahmp_state%swe)
 
     ! write snow_depth over land (file name: snwdph, vert dim 1)
-    call write_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+    call write_nc_var2D(ncid, trim(file_name), len_land_vec, res, tile2vector, 0, & 
                         noahmp_state%name_snow_depth, noahmp_state%snow_depth)
 
     if (frac_grid) then
        ! write swe over grid (file name: sheleg, vert dim 1) 
-        call write_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+        call write_nc_var2D(ncid, trim(file_name), len_land_vec, res, tile2vector, 0, & 
                             grid_state%name_swe, grid_state%swe)
 
         ! write snow_depth over grid (file name: snwdph, vert dim 1)
-        call write_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+        call write_nc_var2D(ncid, trim(file_name), len_land_vec, res, tile2vector, 0, & 
                             grid_state%name_snow_depth, grid_state%snow_depth)
     endif 
 
     ! write active_snow_layers (file name: snowxy, vert dim: 1) 
-    call write_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+    call write_nc_var2D(ncid, trim(file_name), len_land_vec, res, tile2vector, 0, & 
                         'snowxy    ', noahmp_state%active_snow_layers)
 
     ! write swe_previous (file name: sneqvoxy, vert dim: 1) 
-    call write_nc_var2D(ncid, len_land_vec, res, tile2vector, 0, & 
+    call write_nc_var2D(ncid, trim(file_name), len_land_vec, res, tile2vector, 0, & 
                         'sneqvoxy  ', noahmp_state%swe_previous)
 
     ! write snow_soil_interface (file name: zsnsoxy, vert dim: 7) 
-    call write_nc_var3D(ncid, len_land_vec, res, 7,  tile2vector, & 
+    call write_nc_var3D(ncid, trim(file_name), len_land_vec, res, 7,  tile2vector, & 
                         'zsnsoxy   ', noahmp_state%snow_soil_interface)
 
     ! write temperature_snow (file name: tsnoxy, vert dim: 3) 
-    call write_nc_var3D(ncid, len_land_vec, res, 3, tile2vector, & 
+    call write_nc_var3D(ncid, trim(file_name), len_land_vec, res, 3, tile2vector, & 
                         'tsnoxy    ', noahmp_state%temperature_snow)
 
     ! write snow_ice_layer (file name:  snicexy, vert dim: 3) 
-    call write_nc_var3D(ncid, len_land_vec, res, 3, tile2vector, & 
+    call write_nc_var3D(ncid, trim(file_name), len_land_vec, res, 3, tile2vector, & 
                         'snicexy    ', noahmp_state%snow_ice_layer)
 
     ! write snow_liq_layer (file name: snliqxy, vert dim: 3) 
-    call write_nc_var3D(ncid, len_land_vec, res, 3, tile2vector, & 
+    call write_nc_var3D(ncid, trim(file_name), len_land_vec, res, 3, tile2vector, & 
                         'snliqxy   ', noahmp_state%snow_liq_layer)
 
     ! write temperature_soil (file name: stc, use layer 1 only, vert dim: 1) 
-    call write_nc_var2D(ncid, len_land_vec, res, tile2vector, 4, & 
+    call write_nc_var2D(ncid, trim(file_name), len_land_vec, res, tile2vector, 4, & 
                         'stc       ', noahmp_state%temperature_soil)
 
 
@@ -713,10 +724,11 @@ end subroutine read_nc_var3D
 ! Subroutine to write a 2D variable to the netcdf file 
 !--------------------------------------------------------
 
-subroutine write_nc_var2D(ncid, len_land_vec, res, tile2vector,   & 
+subroutine write_nc_var2D(ncid, file_name, len_land_vec, res, tile2vector,   & 
                 in3D_vdim, var_name, data_vec)
 
     integer, intent(in)             :: ncid, len_land_vec, res
+    character(len=*), intent(in)    :: file_name
     character(len=10), intent(in)   :: var_name
     integer, intent(in)             :: tile2vector(len_land_vec,2)
     integer, intent(in)             :: in3D_vdim ! 0 - input is 2D, 
@@ -728,14 +740,14 @@ subroutine write_nc_var2D(ncid, len_land_vec, res, tile2vector,   &
     integer          :: nn, ierr, id_var
 
     ierr=nf90_inq_varid(ncid, trim(var_name), id_var)
-    call netcdf_err(ierr, 'reading '//trim(var_name)//' id' )
+    call netcdf_err(ierr, 'reading '//trim(var_name)//' id in '//trim(file_name) )
     if (in3D_vdim==0) then 
         ierr=nf90_get_var(ncid, id_var, dummy2D)
-        call netcdf_err(ierr, 'reading '//trim(var_name)//' data' )
+        call netcdf_err(ierr, 'reading '//trim(var_name)//' data in '//trim(file_name) )
     else  ! special case for reading in multi-level variable, and 
           ! retaining only first level.
         ierr=nf90_get_var(ncid, id_var, dummy3D)
-        call netcdf_err(ierr, 'reading '//trim(var_name)//' data' )
+        call netcdf_err(ierr, 'reading '//trim(var_name)//' data in '//trim(file_name) )
         dummy2D = dummy3D(:,:,1)
     endif
     
@@ -747,11 +759,11 @@ subroutine write_nc_var2D(ncid, len_land_vec, res, tile2vector,   &
     ! overwrite
     if (in3D_vdim==0) then 
         ierr = nf90_put_var( ncid, id_var, dummy2D)
-        call netcdf_err(ierr, 'writing '//trim(var_name) )
+        call netcdf_err(ierr, 'writing '//trim(var_name)//' in '//trim(file_name) )
     else 
         dummy3D(:,:,1) = dummy2D 
         ierr = nf90_put_var( ncid, id_var, dummy3D)
-        call netcdf_err(ierr, 'writing '//trim(var_name) )
+        call netcdf_err(ierr, 'writing '//trim(var_name)//' in '//trim(file_name) )
     endif
     call remove_checksum(ncid, id_var)
  
@@ -761,10 +773,11 @@ end subroutine write_nc_var2D
 ! Subroutine to write a 3D variable to the netcdf file 
 !--------------------------------------------------------
 
-subroutine write_nc_var3D(ncid, len_land_vec, res, vdim, & 
+subroutine write_nc_var3D(ncid, file_name, len_land_vec, res, vdim, & 
                 tile2vector, var_name, data_vec)
 
     integer, intent(in)             :: ncid, len_land_vec, res, vdim
+    character(len=*), intent(in)    :: file_name
     character(len=10), intent(in)   :: var_name
     integer, intent(in)             :: tile2vector(len_land_vec,2)
     double precision, intent(in)    :: data_vec(len_land_vec, vdim)
@@ -773,9 +786,9 @@ subroutine write_nc_var3D(ncid, len_land_vec, res, vdim, &
     integer          :: nn, ierr, id_var
 
     ierr=nf90_inq_varid(ncid, trim(var_name), id_var)
-    call netcdf_err(ierr, 'reading '//trim(var_name)//' id' )
+    call netcdf_err(ierr, 'reading '//trim(var_name)//' id in '//trim(file_name) )
     ierr=nf90_get_var(ncid, id_var, dummy3D)
-    call netcdf_err(ierr, 'reading '//trim(var_name)//' data' )
+    call netcdf_err(ierr, 'reading '//trim(var_name)//' data in '//trim(file_name) )
     
     ! sub in updated locations (retain previous fields for non-land)  
     do nn=1,len_land_vec 
@@ -784,7 +797,7 @@ subroutine write_nc_var3D(ncid, len_land_vec, res, vdim, &
 
     ! overwrite
     ierr = nf90_put_var( ncid, id_var, dummy3D)
-    call netcdf_err(ierr, 'writing '//trim(var_name) )
+    call netcdf_err(ierr, 'writing '//trim(var_name)//' in '//trim(file_name) )
     call remove_checksum(ncid, id_var)
  
 end subroutine write_nc_var3D
