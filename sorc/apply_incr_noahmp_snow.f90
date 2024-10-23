@@ -71,7 +71,7 @@
 
     open (action='read', file='apply_incr_nml', iostat=ierr, newunit=lunit, iomsg=ioerrmsg)
     read (nml=noahmp_snow, iostat=ierr, unit=lunit)
-    close (nlunit)
+    close (lunit)
     if (ierr /= 0) then
         write(6,*) trim(ioerrmsg)         
         call mpi_abort(mpi_comm_world, 10)
