@@ -43,6 +43,7 @@
 
  character(len=512) :: restart_file
  character(len=1)   :: tilech
+ character(len=512) :: ioerrmsg
 
  namelist /noahmp_snow/ date_str, hour_str, res, frac_grid, rst_path, inc_path, orog_path, otype, ntiles, ens_size
 !
@@ -58,6 +59,7 @@
     inc_path = './'
     ntiles = 6
     ens_size = 1
+
     ! READ NAMELIST 
 
     inquire (file='apply_incr_nml', exist=file_exists) 
@@ -67,8 +69,13 @@
         call mpi_abort(mpi_comm_world, 10)
     end if
 
-    open (action='read', file='apply_incr_nml', iostat=ierr, newunit=lunit)
+    open (action='read', file='apply_incr_nml', iostat=ierr, newunit=lunit, iomsg=ioerrmsg)
     read (nml=noahmp_snow, iostat=ierr, unit=lunit)
+    close (nlunit)
+    if (ierr /= 0) then
+        write(6,*) trim(ioerrmsg)         
+        call mpi_abort(mpi_comm_world, 10)
+    end if
     if (myrank==0) then
     !    write (6, noahmp_snow)
         print*, 'ens_size ', ens_size, ' ntiles ', ntiles
