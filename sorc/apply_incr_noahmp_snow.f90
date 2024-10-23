@@ -71,7 +71,7 @@
     read (nml=noahmp_snow, iostat=ierr, unit=lunit)
     if (myrank==0) then
     !    write (6, noahmp_snow)
-        print*, 'ens_size ', ens_size, ' num_tiles ', num_tiles
+        print*, 'ens_size ', ens_size, ' ntiles ', ntiles
     end if
 
     ! SET VARIABLE NAMES FOR SNOW OVER LAND AND GRID
@@ -206,7 +206,7 @@
         print*, "finisheed loop proc ", myrank, " ensemble member ", ens_mem, " tile ", tile_num
 
     enddo
-    
+
     print*, "finisheed apply_incr_noahmp_snow on proc ", myrank
     call mpi_finalize(ierr)
 
