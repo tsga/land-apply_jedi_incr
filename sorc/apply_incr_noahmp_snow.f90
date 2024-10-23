@@ -72,12 +72,12 @@
     open (action='read', file='apply_incr_nml', iostat=ierr, newunit=lunit, iomsg=ioerrmsg)
     read (nml=noahmp_snow, iostat=ierr, unit=lunit)
     close (lunit)
-    if (ierr /= 0) then
-        write(6,*) trim(ioerrmsg)         
-        call mpi_abort(mpi_comm_world, 10)
-    end if
+    ! if (ierr /= 0) then
+    !     write(6,*) trim(ioerrmsg)         
+    !     call mpi_abort(mpi_comm_world, 10)
+    ! end if
     if (myrank==0) then
-    !    write (6, noahmp_snow)
+       write (6, noahmp_snow)
         print*, 'ens_size ', ens_size, ' ntiles ', ntiles
     end if
 
