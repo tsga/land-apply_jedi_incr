@@ -77,11 +77,11 @@
         write(6,*) trim(ioerrmsg)         
         call mpi_abort(mpi_comm_world, 10)
     end if
-    ! uncommented this because it helped catch a namelist error
-    if (myrank==0) then
-       write (6, noahmp_snow)
-    !    print*, 'ens_size ', ens_size, ' ntiles ', ntiles
-    end if
+    ! uncommenting this may help catch a namelist error
+    ! if (myrank==0) then
+    !    write (6, noahmp_snow)
+    ! !    print*, 'ens_size ', ens_size, ' ntiles ', ntiles
+    ! end if
 
     ! SET VARIABLE NAMES FOR SNOW OVER LAND AND GRID
     if (frac_grid) then 
@@ -112,7 +112,7 @@
         endif
 
         print*
-        print*, "apply_incr_noahmp_snow on proc ", myrank, " ensemble member ", ens_mem, " tile ", tile_num
+        print*, "Proc ", myrank, " ensemble member ", ens_mem, " tile ", tile_num
 
         ! GET MAPPING INDEX (see subroutine comments re: source of land/sea mask)
 
@@ -185,8 +185,8 @@
                     frac_grid, tile2vector) 
 
         ! CLOSE RESTART FILE 
-        print*
-        print*,"apply_incr_noahmp_snow, closing restart on proc ", myrank, " ensemble member ", ens_mem, " tile ", tile_num
+        ! print*
+        ! print*,"apply_incr_noahmp_snow, closing restart on proc ", myrank, " ensemble member ", ens_mem, " tile ", tile_num
         ierr = nf90_close(ncid)
         call netcdf_err( ierr, "closing restart file "//trim(restart_file) )
         
@@ -211,12 +211,12 @@
             deallocate(snow_depth_back) !
         endif
 
-        print*
-        print*, "finisheed loop proc ", myrank, " ensemble member ", ens_mem, " tile ", tile_num
+        ! print*
+        ! print*, "finisheed loop proc ", myrank, " ensemble member ", ens_mem, " tile ", tile_num
 
     enddo
 
-    print*, "finisheed apply_incr_noahmp_snow on proc ", myrank
+    print*, "Finisheed on proc ", myrank
     call mpi_finalize(ierr)
 
  contains 
@@ -299,7 +299,7 @@
             call mpi_abort(mpi_comm_world, 10) 
     endif
 
-    write (6, *) 'calculate mapping from land mask in ', trim(restart_file)
+    ! write (6, *) 'calculate mapping from land mask in ', trim(restart_file)
 
     ierr=nf90_open(trim(restart_file),nf90_write,ncid)
     call netcdf_err(ierr, 'opening file: '//trim(restart_file) )
@@ -406,7 +406,7 @@ end subroutine get_fv3_mapping
             call mpi_abort(mpi_comm_world, 10) 
     endif
 
-    write (6, *) 'opening ', trim(restart_file)
+    ! write (6, *) 'opening ', trim(restart_file)
 
     ierr=nf90_open(trim(restart_file),nf90_write,ncid)
     call netcdf_err(ierr, 'opening file: '//trim(restart_file) )
@@ -506,7 +506,7 @@ end subroutine read_fv3_restart
             call mpi_abort(mpi_comm_world, 10) 
     endif
 
-    write (6, *) 'opening ', trim(filename)
+    ! write (6, *) 'opening ', trim(filename)
 
     ierr=nf90_open(trim(filename),nf90_nowrite,ncid)
     call netcdf_err(ierr, 'opening file: '//trim(filename) )
@@ -527,7 +527,7 @@ end subroutine read_fv3_restart
                         'land_frac  ', grid_state%land_frac)
 
     ! close file 
-    write (6, *) 'closing ', trim(filename)
+    ! write (6, *) 'closing ', trim(filename)
 
     ierr=nf90_close(ncid)
     call netcdf_err(ierr, 'closing file: '//trim(filename) )
@@ -574,7 +574,7 @@ end subroutine read_fv3_orog
             call mpi_abort(mpi_comm_world, 10) 
     endif
 
-    write (6, *) 'opening ', trim(incr_file)
+    ! write (6, *) 'opening ', trim(incr_file)
 
     ierr=nf90_open(trim(incr_file),nf90_nowrite,ncid)
     call netcdf_err(ierr, 'opening file: '//trim(incr_file) )
@@ -595,7 +595,7 @@ end subroutine read_fv3_orog
                         control_var, increment)
 
     ! close file 
-    write (6, *) 'closing ', trim(incr_file)
+    ! write (6, *) 'closing ', trim(incr_file)
 
     ierr=nf90_close(ncid)
     call netcdf_err(ierr, 'closing file: '//trim(incr_file) )
