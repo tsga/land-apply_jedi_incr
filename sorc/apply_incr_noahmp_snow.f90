@@ -55,6 +55,7 @@
     print*,"starting apply_incr_noahmp_snow program on rank ", myrank, ' of ', nprocs, ' procs'
 
     ! SET NAMELIST DEFAULTS
+    frac_grid = .false.
     rst_path = './'
     inc_path = './'
     ntiles = 6
