@@ -46,14 +46,14 @@ program apply_incr_noahmp_snow
  character(len=512) :: ioerrmsg
 
  double precision   :: noincr_threshold
- logical            :: print_summary, print_debug, truncate
+ logical            :: print_summary, print_debug, truncate, deterministic_increment !(single_increment?)
  
  double precision   :: snd_threshold=0.0001, swe_threshold=0.00001
 
  double precision   :: fice_threshold, lfrac_threshold
 
  namelist /noahmp_snow/ date_str, hour_str, res, frac_grid, rst_path, inc_path, orog_path, otype, ntiles, ens_size, &
-                        noincr_threshold, print_summary, print_debug, truncate, fice_threshold, lfrac_threshold
+                        noincr_threshold, print_summary, print_debug, truncate, fice_threshold, lfrac_threshold, deterministic_increment
 
     call mpi_init(ierr)
     call mpi_comm_size(mpi_comm_world, nprocs, ierr)
@@ -73,6 +73,7 @@ program apply_incr_noahmp_snow
     truncate = .false.
     fice_threshold=0.0
     lfrac_threshold=0.0001
+    deterministic_increment=.false.
 
     ! READ NAMELIST 
     inquire (file='apply_incr_nml', exist=file_exists) 
@@ -110,10 +111,11 @@ program apply_incr_noahmp_snow
 
         write(ens_str, '(I3.3)') ens_mem
 
-!TBCL: keep the default for ens_size=1
+! append ens_dir for ens_size>1; keep default if deterministic increment, e.g., from OI/3DVar
         if(ens_size > 1) then 
             rst_path_full = trim(rst_path)//"/mem"//ens_str//"/"
             inc_path_full = trim(inc_path)//"/mem"//ens_str//"/"
+            if (deterministic_increment) inc_path_full = trim(inc_path)
         else
             rst_path_full = trim(rst_path)      
             inc_path_full = trim(inc_path)      
