@@ -23,6 +23,7 @@ program apply_incr_noahmp_snow
 
  integer :: ierr, irank, nprocs, myrank, lunit, ncid, n
  integer :: ntiles, ens_size, ens_mem, tile_num
+ integer :: work_per_proc, remainder, start_iter, end_iter
  character(len=3) :: ens_str
  logical :: file_exists
 
@@ -68,7 +69,7 @@ program apply_incr_noahmp_snow
     ntiles = 6
     ens_size = 1
     noincr_threshold = 999999999.9
-    print_summary = .true.
+    print_summary = .false.
     print_debug = .false.
     truncate = .false.
     fice_threshold=0.0
@@ -104,8 +105,21 @@ program apply_incr_noahmp_snow
         grid_state%name_snow_depth =    'snwdph    '
         grid_state%name_swe =           'sheleg    '
     endif
+    print_summary = .false.
 
-    do irank=myrank, ntiles*ens_size - 1, nprocs
+    work_per_proc = (ntiles * ens_size) / nprocs
+    remainder = mod(ntiles * ens_size, nprocs)
+    
+    if (myrank < remainder) then
+        start_iter = myrank * (work_per_proc + 1)
+        end_iter = start_iter + work_per_proc
+    else
+        start_iter = remainder * (work_per_proc + 1) + (myrank - remainder) * work_per_proc
+        end_iter = start_iter + work_per_proc - 1
+    end if
+    
+    do irank = start_iter, end_iter
+    !do irank=myrank, ntiles*ens_size - 1, nprocs
         ens_mem = irank/ntiles + 1            !ensemble member
         tile_num = MOD(irank, ntiles) + 1      !tile number
 
@@ -123,7 +137,7 @@ program apply_incr_noahmp_snow
         
         ! Calculate MAPPING INDEX based on land fraction
         call get_fv3_mapping_lfrac(tile_num, rst_path_full, date_str, hour_str, res, &
-             orog_path, otype, frac_grid, lfrac_threshold, fice_threshold, len_land_vec, tile2vector)
+             orog_path, otype, frac_grid, lfrac_threshold, fice_threshold, len_land_vec, tile2vector, print_debug)
 
         ! SET-UP THE NOAH-MP STATE  AND INCREMENT        
         ! The allocations are inside the loop because different ensemble members could have different len_land_vec
@@ -267,7 +281,7 @@ program apply_incr_noahmp_snow
 !--------------------------------------------------------------
 
  subroutine get_fv3_mapping_lfrac(tile_num, rst_path, date_str, hour_str, res, & 
-            orog_path, otype, fice_grid, lfrac_thold, fice_fhold, len_land_vec, tile2vector)
+            orog_path, otype, fice_grid, lfrac_thold, fice_fhold, len_land_vec, tile2vector, print_debug)
 
  implicit none 
 
@@ -283,6 +297,7 @@ program apply_incr_noahmp_snow
  double precision, intent(in)      :: lfrac_thold, fice_fhold
  integer, intent(out)              :: len_land_vec
  integer, allocatable, intent(out) :: tile2vector(:,:)
+ logical, intent(in)               :: print_debug
 
  character(len=512) :: restart_file, filename
  character(len=1)   :: rankch
@@ -382,7 +397,7 @@ program apply_incr_noahmp_snow
 
     ! remove land grid cells if ice is present
     if (fice_grid) then
-        write (6, *) 'ammending mask to exclude sea ice from', trim(restart_file)
+        if (print_debug) write (6, *) 'ammending mask to exclude sea ice from', trim(restart_file)
         do i = 1, res
             do j = 1, res
                 if (fice(i,j) > fice_fhold ) then 
