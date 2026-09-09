@@ -167,137 +167,143 @@ program apply_incr_noahmp_soil
 
         enddo 
          
-        if (myrank==0) print*, "apply_incr_noahmp_soil finishing"
-        call mpi_finalize(ierr)
+    else
 
-        return 
+        allocate(styper(res, res))
+
+        do irank=myrank, ntiles*ens_size - 1, nprocs
+            ens_mem = irank/ntiles + 1            !ensemble member
+            tile_num = MOD(irank, ntiles) + 1      !tile number
+
+            write(ens_str, '(I3.3)') ens_mem
+
+            !TBCL: keep the default for ens_size=1
+            if(ens_size > 1) then 
+                rst_path_full = trim(rst_path)//"/mem"//ens_str//"/"
+                inc_path_full = trim(inc_path)//"/mem"//ens_str//"/"
+            else
+                rst_path_full = trim(rst_path)      
+                inc_path_full = trim(inc_path)      
+            endif
+            
+            ! Calculate MAPPING INDEX based on land fraction
+            call get_fv3_mapping_lfrac(tile_num, rst_path_full, date_str, hour_str, res, &
+                orog_path,otype,frac_grid,lfrac_threshold,fice_threshold,len_land_vec,tile2vector,stype_prefix,styper)
+
+            ! SET-UP THE NOAH-MP STATE  AND INCREMENT        
+            ! The allocations are inside the loop because different ensemble members could have different len_land_vec
+            allocate(noahmp_state%stc_bkg         (len_land_vec, lsoil)) 
+            allocate(noahmp_state%stc             (len_land_vec, lsoil))
+            allocate(noahmp_state%smc             (len_land_vec, lsoil))  
+            allocate(noahmp_state%slc             (len_land_vec, lsoil)) 
+            allocate(noahmp_state%stc_inc         (len_land_vec, lsoil_incr))
+            allocate(noahmp_state%slc_inc         (len_land_vec, lsoil_incr))
+            !allocate(noahmp_state%smc_inc         (len_land_vec, lsoil_incr))
+            allocate(noahmp_state%stc_updated     (len_land_vec))
+            allocate(noahmp_state%slc_updated     (len_land_vec))
+            allocate(noahmp_state%soilsnow_tile   (len_land_vec))
+            !allocate(noahmp_state%soilsnow_fg_tile(len_land_vec))
+            !allocate(noahmp_state%land_frac       (len_land_vec)) 
+            allocate(noahmp_state%swe             (len_land_vec))
+            allocate(noahmp_state%vtype           (len_land_vec))
+            allocate(noahmp_state%stype           (len_land_vec))
+        
+            ! map soil types
+            do nn=1,len_land_vec
+                noahmp_state%stype = nint(styper(tile2vector(nn,1), tile2vector(nn,2)))
+            enddo
+
+            ! READ RESTART FILE 
+            write(tilech, '(i1.1)') (tile_num)
+            restart_file = trim(rst_path_full)//"/"//date_str//"."//hour_str//"0000.sfc_data.tile"//tilech//".nc"
+
+            call read_fv3_restart(trim(restart_file), res, ncid, len_land_vec, tile2vector, noahmp_state, lsoil)
+            noahmp_state%stc_bkg = noahmp_state%stc
+
+            ! READ soil DA increments
+            if (csg_increment) then
+                call read_csg_increment(tile_num, inc_path_full, inc_prefix, res, &
+                    len_land_vec, tile2vector, noahmp_state, lsoil_incr, upd_stc, upd_slc)
+            else
+                call read_fv3_increment(tile_num, inc_path_full, date_str, hour_str, res, &
+                        len_land_vec, tile2vector, inc_prefix, noahmp_state, lsoil_incr, upd_stc, upd_slc)
+            endif
+
+            call calculate_landinc_mask(noahmp_state%swe,noahmp_state%vtype,noahmp_state%stype,&
+                    len_land_vec, veg_type_landice, noahmp_state%soilsnow_tile)                ! soilsnow_fg_tile
+
+            call add_increment_soil(lsoil_incr,noahmp_state%stc_inc,noahmp_state%slc_inc, &
+                noahmp_state%stc,noahmp_state%smc,noahmp_state%slc,&
+                noahmp_state%stc_updated,noahmp_state%slc_updated,noahmp_state%soilsnow_tile,noahmp_state%soilsnow_tile,&
+                len_land_vec,lsoil,myrank, upd_stc, upd_slc, print_summary, print_debug)
+            
+        !call calculate_landinc_mask(noahmp_state%swe,noahmp_state%vtype,noahmp_state%stype,&
+        !         len_land_vec, veg_type_landice, noahmp_state%soilsnow_tile)
+
+            call apply_land_da_adjustments_soil(lsoil_incr, isot, ivegsrc, len_land_vec, &
+                    lsoil, noahmp_state%stype, noahmp_state%soilsnow_tile,noahmp_state%stc_bkg, &
+                    noahmp_state%stc,noahmp_state%smc,noahmp_state%slc, &
+                    noahmp_state%stc_updated,noahmp_state%slc_updated, zsoil, upd_stc, upd_slc, myrank, print_summary, print_debug)
+                
+            ! WRITE OUT ADJUSTED RESTART
+            call write_fv3_restart(trim(restart_file),noahmp_state,res,ncid,len_land_vec,tile2vector,lsoil) 
+            
+            ! CLOSE RESTART FILE 
+            ierr = nf90_close(ncid)
+            call netcdf_err( ierr, "closing restart file "//trim(restart_file) )
+            
+            ! Deallocate. These are required incase a single process loops through multiple tiles with different mapping     
+            if (allocated(tile2vector)) deallocate(tile2vector)   
+                    
+            deallocate(noahmp_state%stc_bkg           )
+            deallocate(noahmp_state%stc               )
+            deallocate(noahmp_state%smc               )
+            deallocate(noahmp_state%slc               )
+            deallocate(noahmp_state%stc_inc           )
+            deallocate(noahmp_state%slc_inc           )
+            !deallocate(noahmp_state%smc_inc          )
+            deallocate(noahmp_state%stc_updated       )
+            deallocate(noahmp_state%slc_updated       )
+            deallocate(noahmp_state%soilsnow_tile     )
+            !deallocate(noahmp_state%soilsnow_fg_tile )
+            !deallocate(noahmp_state%land_frac        )
+            deallocate(noahmp_state%swe               )
+            deallocate(noahmp_state%vtype             )
+            deallocate(noahmp_state%stype             )
+
+        enddo
+
+        deallocate(styper)
 
     endif
 
-    allocate(styper(res, res))
-
-    do irank=myrank, ntiles*ens_size - 1, nprocs
-        ens_mem = irank/ntiles + 1            !ensemble member
-        tile_num = MOD(irank, ntiles) + 1      !tile number
-
-        write(ens_str, '(I3.3)') ens_mem
-
-!TBCL: keep the default for ens_size=1
-        if(ens_size > 1) then 
-            rst_path_full = trim(rst_path)//"/mem"//ens_str//"/"
-            inc_path_full = trim(inc_path)//"/mem"//ens_str//"/"
-        else
-            rst_path_full = trim(rst_path)      
-            inc_path_full = trim(inc_path)      
-        endif
-        
-        ! Calculate MAPPING INDEX based on land fraction
-        call get_fv3_mapping_lfrac(tile_num, rst_path_full, date_str, hour_str, res, &
-             orog_path,otype,frac_grid,lfrac_threshold,fice_threshold,len_land_vec,tile2vector,stype_prefix,styper)
-
-        ! SET-UP THE NOAH-MP STATE  AND INCREMENT        
-        ! The allocations are inside the loop because different ensemble members could have different len_land_vec
-        allocate(noahmp_state%stc_bkg         (len_land_vec, lsoil)) 
-        allocate(noahmp_state%stc             (len_land_vec, lsoil))
-        allocate(noahmp_state%smc             (len_land_vec, lsoil))  
-        allocate(noahmp_state%slc             (len_land_vec, lsoil)) 
-        allocate(noahmp_state%stc_inc         (len_land_vec, lsoil_incr))
-        allocate(noahmp_state%slc_inc         (len_land_vec, lsoil_incr))
-        !allocate(noahmp_state%smc_inc         (len_land_vec, lsoil_incr))
-        allocate(noahmp_state%stc_updated     (len_land_vec))
-        allocate(noahmp_state%slc_updated     (len_land_vec))
-        allocate(noahmp_state%soilsnow_tile   (len_land_vec))
-        !allocate(noahmp_state%soilsnow_fg_tile(len_land_vec))
-        !allocate(noahmp_state%land_frac       (len_land_vec)) 
-        allocate(noahmp_state%swe             (len_land_vec))
-        allocate(noahmp_state%vtype           (len_land_vec))
-        allocate(noahmp_state%stype           (len_land_vec))
-       
-        ! map soil types
-        do nn=1,len_land_vec
-            noahmp_state%stype = nint(styper(tile2vector(nn,1), tile2vector(nn,2)))
-        enddo
-
-        ! READ RESTART FILE 
-        write(tilech, '(i1.1)') (tile_num)
-        restart_file = trim(rst_path_full)//"/"//date_str//"."//hour_str//"0000.sfc_data.tile"//tilech//".nc"
-
-        call read_fv3_restart(trim(restart_file), res, ncid, len_land_vec, tile2vector, noahmp_state, lsoil)
-        noahmp_state%stc_bkg = noahmp_state%stc
-
-        ! READ soil DA increments
-        if (csg_increment) then
-             call read_csg_increment(tile_num, inc_path_full, inc_prefix, res, &
-                len_land_vec, tile2vector, noahmp_state, lsoil_incr, upd_stc, upd_slc)
-        else
-             call read_fv3_increment(tile_num, inc_path_full, date_str, hour_str, res, &
-                    len_land_vec, tile2vector, inc_prefix, noahmp_state, lsoil_incr, upd_stc, upd_slc)
-        endif
-
-        call calculate_landinc_mask(noahmp_state%swe,noahmp_state%vtype,noahmp_state%stype,&
-                len_land_vec, veg_type_landice, noahmp_state%soilsnow_tile)                ! soilsnow_fg_tile
-
-        call add_increment_soil(lsoil_incr,noahmp_state%stc_inc,noahmp_state%slc_inc, &
-               noahmp_state%stc,noahmp_state%smc,noahmp_state%slc,&
-               noahmp_state%stc_updated,noahmp_state%slc_updated,noahmp_state%soilsnow_tile,noahmp_state%soilsnow_tile,&
-               len_land_vec,lsoil,myrank, upd_stc, upd_slc, print_summary, print_debug)
-        
-       !call calculate_landinc_mask(noahmp_state%swe,noahmp_state%vtype,noahmp_state%stype,&
-       !         len_land_vec, veg_type_landice, noahmp_state%soilsnow_tile)
-
-        call apply_land_da_adjustments_soil(lsoil_incr, isot, ivegsrc, len_land_vec, &
-                 lsoil, noahmp_state%stype, noahmp_state%soilsnow_tile,noahmp_state%stc_bkg, &
-                 noahmp_state%stc,noahmp_state%smc,noahmp_state%slc, &
-                 noahmp_state%stc_updated,noahmp_state%slc_updated, zsoil, upd_stc, upd_slc, myrank, print_summary, print_debug)
-            
-        ! WRITE OUT ADJUSTED RESTART
-        call write_fv3_restart(trim(restart_file),noahmp_state,res,ncid,len_land_vec,tile2vector,lsoil) 
-        
-        ! CLOSE RESTART FILE 
-        ierr = nf90_close(ncid)
-        call netcdf_err( ierr, "closing restart file "//trim(restart_file) )
-        
-        ! Deallocate. These are required incase a single process loops through multiple tiles with different mapping     
-        if (allocated(tile2vector)) deallocate(tile2vector)   
-                
-        deallocate(noahmp_state%stc_bkg           )
-        deallocate(noahmp_state%stc               )
-        deallocate(noahmp_state%smc               )
-        deallocate(noahmp_state%slc               )
-        deallocate(noahmp_state%stc_inc           )
-        deallocate(noahmp_state%slc_inc           )
-        !deallocate(noahmp_state%smc_inc          )
-        deallocate(noahmp_state%stc_updated       )
-        deallocate(noahmp_state%slc_updated       )
-        deallocate(noahmp_state%soilsnow_tile     )
-        !deallocate(noahmp_state%soilsnow_fg_tile )
-        !deallocate(noahmp_state%land_frac        )
-        deallocate(noahmp_state%swe               )
-        deallocate(noahmp_state%vtype             )
-        deallocate(noahmp_state%stype             )
-
-    enddo
-
-    deallocate(styper)
-
     if (myrank==0) print*, "apply_incr_noahmp_soil finishing"
     call mpi_finalize(ierr)
+
+    stop 0
 
  contains 
 
 !--------------------------------------------------------------
 ! if at netcdf call returns an error, print out a message and stop processing.
 !--------------------------------------------------------------
- subroutine netcdf_err( err, string )
+ subroutine netcdf_err( err, stringin )
 
         implicit none
 
         include 'mpif.h'
 
         integer, intent(in) :: err
-        character(len=*), intent(in) :: string
+        character(len=*), optional, intent(in) :: stringin
         character(len=80) :: errmsg
         integer           :: ierr
+        character(len=256) :: string
+
+        if (present(stringin)) then
+            string = trim(stringin)
+        else
+            string = ""
+        endif
 
         if( err == nf90_noerr )return
         errmsg = nf90_strerror(err)
@@ -319,14 +325,12 @@ program apply_incr_noahmp_soil
     character*10        :: restart_date
     integer             :: vector_length, lsoil
 
-    character*19        :: date
     character*256       :: vector_filename, filename
     integer             :: ncid, dimid, varid, status
     logical             :: file_exists
 
     character*19        :: date
     integer             :: yyyy,mm,dd,hh,nn,ss
-    integer             :: itile, ix, iy, iloc
 
     read(restart_date( 1: 4),'(i4.4)') yyyy
     read(restart_date( 5: 6),'(i2.2)') mm
@@ -356,48 +360,48 @@ program apply_incr_noahmp_soil
 
     status = nf90_open(filename, nf90_write, ncid)
     if (status /= nf90_noerr) then 
-        call handle_err(status) 
+        call netcdf_err(status, "opening vector file "//trim(filename)) 
     endif
 
     status = nf90_inq_varid(ncid, "temperature_soil", varid)
     if (status /= nf90_noerr) then 
-            print *, 'temperature_soil variable missing from vector file' 
-            call handle_err(status) 
+        print *, 'temperature_soil variable missing from vector file' 
+        call netcdf_err(status, "reading temperature_soil varid in "//trim(filename)) 
     endif
     status = nf90_put_var(ncid, varid , noahmp_state%stc , &
         start = (/1            , 1, 1/)                , &
         count = (/vector_length, lsoil, 1/))
     if (status /= nf90_noerr) then  
-        call handle_err(status) 
+        call netcdf_err(status, "writing temperature_soil in "//trim(filename)) 
     endif
 
     status = nf90_inq_varid(ncid, "soil_liquid_vol", varid)
     if (status /= nf90_noerr) then 
         print *, 'soil_liquid_vol variable missing from vector file' 
-        call handle_err(status) 
+        call netcdf_err(status, "reading soil_liquid_vol varid in "//trim(filename)) 
     endif
     status = nf90_put_var(ncid, varid , noahmp_state%slc , &
         start = (/1            , 1, 1/)                , &
         count = (/vector_length, lsoil/))
     if (status /= nf90_noerr) then  
-        call handle_err(status) 
+        call netcdf_err(status, "writing soil_liquid_vol in "//trim(filename)) 
     endif
    
     status = nf90_inq_varid(ncid, "soil_moisture_vol", varid)
     if (status /= nf90_noerr) then 
         print *, 'soil_moisture_vol variable missing from vector file' 
-        call handle_err(status) 
+        call netcdf_err(status, "reading soil_moisture_vol varid in "//trim(filename)) 
     endif
     status = nf90_put_var(ncid, varid , noahmp_state%smc, &
         start = (/1            , 1, 1/)                , &
         count = (/vector_length, lsoil, 1/))
     if (status /= nf90_noerr) then  
-        call handle_err(status) 
+        call netcdf_err(status, "writing soil_moisture_vol in "//trim(filename)) 
     endif
     
     status = nf90_close(ncid)
     if (status /= nf90_noerr) then  
-        call handle_err(status) 
+        call netcdf_err(status, "closing vector file "//trim(filename)) 
     endif
     
   end subroutine write_vector_restart 
@@ -410,18 +414,15 @@ program apply_incr_noahmp_soil
     type(noahmp_type)   :: noahmp_state
     character(*)        :: vector_restart_path, static_filename
     character*10        :: restart_date
-    integer             :: vector_length
+    integer             :: vector_length, lsoil, lsoil_incr
 
-    character*19        :: date
     character*256       :: vector_filename, filename
     integer             :: ncid, dimid, varid, status
     logical             :: file_exists
 
     character*19        :: date
     integer             :: yyyy,mm,dd,hh,nn,ss
-    integer             :: itile, ix, iy, iloc
-    integer             :: ncid, dimid, varid, status
-    logical             :: file_exists
+
     read(restart_date( 1: 4),'(i4.4)') yyyy
     read(restart_date( 5: 6),'(i2.2)') mm
     read(restart_date( 7: 8),'(i2.2)') dd
@@ -471,42 +472,62 @@ program apply_incr_noahmp_soil
     status = nf90_inq_varid(ncid, "snow_water_equiv", varid)
     if (status /= nf90_noerr) then 
             print *, 'snow_water_equiv variable missing from vector file' 
-            call handle_err(status) 
+            call netcdf_err(status, "reading snow_water_equiv varid from "//trim(filename)) 
     endif
     status = nf90_get_var(ncid, varid , noahmp_state%swe   , &
         start = (/1,1/), count = (/vector_length, 1/))
-
+    if (status /= nf90_noerr) then 
+            print *, 'temperature_soil variable missing from vector file' 
+            call netcdf_err(status, "reading temperature_soil varid from "//trim(filename)) 
+    endif
     
     status = nf90_inq_varid(ncid, "temperature_soil", varid)
     if (status /= nf90_noerr) then 
             print *, 'temperature_soil variable missing from vector file' 
-            call handle_err(status) 
+            call netcdf_err(status) 
     endif
+    if (status /= nf90_noerr) then 
+            print *, 'temperature_soil variable missing from vector file' 
+            call netcdf_err(status, "reading temperature_soil varid from "//trim(filename)) 
+    endif
+
     status = nf90_get_var(ncid, varid , noahmp_state%stc , &
         start = (/1            , 1, 1/)                , &
         count = (/vector_length, lsoil, 1/))
+    if (status /= nf90_noerr) then 
+            print *, 'temperature_soil variable missing from vector file' 
+            call netcdf_err(status, "reading temperature_soil from "//trim(filename)) 
+    endif
 
     status = nf90_inq_varid(ncid, "soil_moisture_vol", varid)
     if (status /= nf90_noerr) then 
             print *, 'soil_moisture_vol variable missing from vector file' 
-            call handle_err(status) 
+            call netcdf_err(status, "reading soil_moisture_vol varid from "//trim(filename)) 
     endif
     status = nf90_get_var(ncid, varid , noahmp_state%smc, &
         start = (/1            , 1, 1/)                , &
         count = (/vector_length, lsoil, 1/))
+    if (status /= nf90_noerr) then
+            print *, 'soil_moisture_vol variable missing from vector file'
+            call netcdf_err(status, "reading soil_moisture_vol from "//trim(filename))
+    endif
 
     status = nf90_inq_varid(ncid, "soil_liquid_vol", varid)
     if (status /= nf90_noerr) then
             print *, 'soil_liquid_vol variable missing from vector file'
-            call handle_err(status)
+            call netcdf_err(status, "reading soil_liquid_vol varid from "//trim(filename))
     endif
     status = nf90_get_var(ncid, varid , noahmp_state%slc , &
         start = (/1            , 1, 1/)                , &
         count = (/vector_length, lsoil, 1/))
+    if (status /= nf90_noerr) then
+            print *, 'soil_liquid_vol variable missing from vector file'
+            call netcdf_err(status, "reading soil_liquid_vol from "//trim(filename))
+    endif
 
     status = nf90_close(ncid)
     if (status /= nf90_noerr) then
-            call handle_err(status)
+            call netcdf_err(status, "closing vector file "//trim(filename))
     endif
 
     ! read vegetation and soil type from static file 
@@ -526,7 +547,7 @@ program apply_incr_noahmp_soil
     status = nf90_inq_varid(ncid, "vegetation_category", varid)
     if (status /= nf90_noerr) then 
             print *, 'vegetation_category missing from static file' 
-            call handle_err(status) 
+            call netcdf_err(status, "reading vegetation_category from "//trim(filename)) 
     endif
     status = nf90_get_var(ncid, varid , noahmp_state%vtype, &
         start = (/1,1/), count = (/vector_length, 1/))
@@ -534,17 +555,17 @@ program apply_incr_noahmp_soil
     status = nf90_inq_varid(ncid, "soil_category", varid)
     if (status /= nf90_noerr) then 
             print *, 'soil_category missing from static file' 
-            call handle_err(status) 
+            call netcdf_err(status, "reading soil_category from "//trim(filename)) 
     endif
     status = nf90_get_var(ncid, varid , noahmp_state%stype, &
         start = (/1,1/), count = (/vector_length, 1/))
     if (status /= nf90_noerr) then
-            call handle_err(status)
+            call netcdf_err(status, "reading soil_category from "//trim(filename))
     endif
         
     status = nf90_close(ncid)
     if (status /= nf90_noerr) then
-            call handle_err(status)
+            call netcdf_err(status, "closing static file "//trim(filename))
     endif
 
   end subroutine read_vector_restart
@@ -559,18 +580,14 @@ program apply_incr_noahmp_soil
 
     include 'mpif.h'
 
-    integer, intent(in) :: len_land_vec, lsoil_incr
-    character(len=*), intent(in) :: inc_path, inc_prefix 
+    integer, intent(in)               :: len_land_vec, lsoil_incr
+    character(len=*), intent(in)      :: inc_path, inc_prefix 
     type(noahmp_type), intent(inout)  :: noahmp_state
     logical, intent(in)               :: upd_stc, upd_slc
 
     character(len=512) :: incr_file
-    logical :: file_exists
-    integer :: ierr 
-    integer :: id_dim, id_var, fres, ncid
-    integer :: nn, nl
-    character(len=20) :: var_name
-    character(len=1)  :: layerch
+    logical            :: file_exists
+    integer            :: status, dimid, varid, fres, ncid
 
     ! OPEN FILE
     incr_file = trim(inc_path)//"/"//trim(inc_prefix)//".nc"
@@ -587,9 +604,9 @@ program apply_incr_noahmp_soil
     call netcdf_err(ierr, 'opening file: '//trim(incr_file) )
 
     ! CHECK DIMENSIONS
-    ierr=nf90_inq_dimid(ncid, 'location', id_dim)
+    ierr=nf90_inq_dimid(ncid, 'location', dimid)
     call netcdf_err(ierr, 'reading location dim from '//trim(incr_file) )
-    ierr=nf90_inquire_dimension(ncid,id_dim,len=fres)
+    ierr=nf90_inquire_dimension(ncid, dimid,len=fres)
     call netcdf_err(ierr, 'reading location length from '//trim(incr_file) )
 
     if ( fres /= len_land_vec) then
@@ -603,24 +620,31 @@ program apply_incr_noahmp_soil
     if (upd_stc) then
         status = nf90_inq_varid(ncid, "stc", varid)
         if (status /= nf90_noerr) then 
-                print *, 'temperature_soil variable missing from increment file' 
-                call handle_err(status) 
+            print *, 'temperature_soil variable missing from increment file' 
+            call netcdf_err(status, 'reading temperature_soil increment varid from '//trim(incr_file)) 
         endif
         status = nf90_get_var(ncid, varid , noahmp_state%stc_inc , &
             start = (/1            , 1, 1/)                , &
             count = (/len_land_vec, lsoil_incr, 1/))
+        if (status /= nf90_noerr) then 
+            print *, 'temperature_soil variable missing from increment file' 
+            call netcdf_err(status, 'reading temperature_soil increment from '//trim(incr_file)) 
+        endif
     endif
 
     if (upd_slc) then
         status = nf90_inq_varid(ncid, "slc", varid)
         if (status /= nf90_noerr) then 
-                print *, 'soil_liquid_vol variable missing from increment file' 
-                call handle_err(status) 
+            print *, 'soil_liquid_vol variable missing from increment file' 
+            call netcdf_err(status, 'reading soil_liquid_vol increment varid from '//trim(incr_file)) 
         endif
         status = nf90_get_var(ncid, varid , noahmp_state%slc_inc , &
             start = (/1            , 1, 1/)                , &
             count = (/len_land_vec, lsoil_incr, 1/))
-
+        if (status /= nf90_noerr) then 
+            print *, 'soil_liquid_vol variable missing from increment file' 
+            call netcdf_err(status, 'reading soil_liquid_vol increment from '//trim(incr_file)) 
+        endif
     endif
 
     ierr=nf90_close(ncid)
