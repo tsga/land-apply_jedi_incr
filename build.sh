@@ -26,7 +26,7 @@ mkdir build
 cd build 
 
 # configure 
-cmake .. -DCMAKE_INSTALL_PREFIX=../exec
+cmake .. -DCMAKE_PREFIX_PATH=../../install -DCMAKE_INSTALL_PREFIX=../exec 
 
 # build 
 cmake --build  .

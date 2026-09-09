@@ -4,9 +4,10 @@
 
 #include "eckit/config/LocalConfiguration.h"
 
-#include "oops/base/Geometry.h"
-#include "oops/base/Increment.h"
-#include "oops/base/State.h"
+#include "fv3jedi/Geometry/Geometry.h"
+#include "fv3jedi/Increment/Increment.h"
+#include "fv3jedi/State/State.h"
+
 #include "oops/base/Variables.h"
 #include "oops/interface/VariableChange.h"
 #include "oops/mpi/mpi.h"
@@ -17,7 +18,7 @@
 
 #include "soil_increments_cpp_interface.h"
 
-namespace land-apply_jedi_incr {
+namespace landincr {
   /**
    * AddLandIncrement Class Implementation
    *
@@ -30,32 +31,36 @@ namespace land-apply_jedi_incr {
 
     virtual ~AddLandIncrement() {}
 
-    static const std::string classname() {return "land-apply_jedi_incr::AddLandIncrement";}
+    static const std::string classname() {return "landincr::AddLandIncrement";}
 
     int execute(const eckit::Configuration & fullConfig) const override {
 
-      int myrank = comm.rank();
+      int myrank = this->getComm().rank();
 
       // We assume both state and increment are in the same geometry
-      const ijedi::Geometry<ijedi::Traits> geom_(eckit::LocalConfiguration(fullConfig, "geometry"),
-                                                      comm);
+      // const ijedi::Geometry<fv3jedi::Traits> geom_(eckit::LocalConfiguration(fullConfig, "geometry"),this->getComm());
+      fv3jedi::Geometry geom_(eckit::LocalConfiguration(fullConfig, "geometry"),this->getComm());
 
       // Read state
-      ijedi::State<ijedi::Traits> xx(geom_, eckit::LocalConfiguration(fullConfig, "background state"));
+      // ijedi::State<ijedi::Traits> xx(geom_, eckit::LocalConfiguration(fullConfig, "background state"));
+      fv3jedi::State xx(geom_, eckit::LocalConfiguration(fullConfig, "background state"));
       oops::Log::test() << "State: " << xx << std::endl;
 
       // Read increment
       const eckit::LocalConfiguration incParams(fullConfig, "increment");
       oops::Variables incVars(incParams, "variables");
-      ijedi::Increment<ijedi::Traits> dx(geom_, incVars, xx.validTime());
+
+      // ijedi::Increment<ijedi::Traits> dx(geom_, incVars, xx.validTime());
+      fv3jedi::Increment dx(geom_, incVars, xx.validTime());
       dx.read(incParams);
       oops::Log::test() << "Increment: " << dx << std::endl;
 
       // Scale increment
-      if (incParams.has("scaling factor")) {
+      // ToDO: may not need for land (land_adj takes care of it if needed)
+      /* if (incParams.has("scaling factor")) {
         dx *= incParams.getDouble("scaling factor");
         oops::Log::test() << "Scaled Increment: " << dx << std::endl;
-      }
+      }*/
 
       atlas::FieldSet bkg_fs;
       xx.toFieldSet(bkg_fs);
@@ -65,7 +70,7 @@ namespace land-apply_jedi_incr {
           oops::Log::error() << "Missing required fields SWE in state FieldSet. Aborting." << std::endl;
           throw eckit::BadValue("Missing required fields in state FieldSet", Here());
       }
-      auto bkg_swe = atlas::array::make_view<double, 2>(bkg_fs["sheleg"]);
+      auto bkgv_swe = atlas::array::make_view<double, 2>(bkg_fs["sheleg"]);
       if (!bkg_fs.has("vtype") ) {
           oops::Log::error() << "Missing required fields vtype in state FieldSet. Aborting." << std::endl;
           throw eckit::BadValue("Missing required fields in state FieldSet", Here());
@@ -81,30 +86,34 @@ namespace land-apply_jedi_incr {
           oops::Log::error() << "Missing required fields stc in state FieldSet. Aborting." << std::endl;
           throw eckit::BadValue("Missing required fields in state FieldSet", Here());
       }
-      auto bkg_stc = atlas::array::make_view<double, 2>(bkg_fs["stc"]);
+      auto bkgv_stc = atlas::array::make_view<double, 2>(bkg_fs["stc"]);
       if (!bkg_fs.has("slc") ) {
           oops::Log::error() << "Missing required fields slc in state FieldSet. Aborting." << std::endl;
           throw eckit::BadValue("Missing required fields in state FieldSet", Here());
       }
-      auto bkg_slc = atlas::array::make_view<double, 2>(bkg_fs["slc"]);
+      auto bkgv_slc = atlas::array::make_view<double, 2>(bkg_fs["slc"]);
       if (!bkg_fs.has("smc") ) {
           oops::Log::error() << "Missing required fields smc in state FieldSet. Aborting." << std::endl;
           throw eckit::BadValue("Missing required fields in state FieldSet", Here());
       }
-      auto bkg_smc = atlas::array::make_view<double, 2>(bkg_fs["smc"]);
+      auto bkgv_smc = atlas::array::make_view<double, 2>(bkg_fs["smc"]);
          
       bool upd_stc = false, upd_slc = false;
       atlas::FieldSet inc_fs;
       dx.toFieldSet(inc_fs);
+
+      atlas::array::ArrayView<double, 2> stcv_inc;
       if (bkg_fs.has("stc_inc")) {
-        auto stc_inc = atlas::array::make_view<double, 2>(bkg_fs["stc_inc"]);
+        stcv_inc = atlas::array::make_view<double, 2>(bkg_fs["stc_inc"]);
         upd_stc = true;
-        oops::Log::trace << "Updating stc" << std::endl;
+        oops::Log::info() << "Updating stc" << std::endl;
       }
+
+      atlas::array::ArrayView<double, 2> slcv_inc;
       if (inc_fs.has("slc_inc")) {
-        auto slc_inc = atlas::array::make_view<double, 2>(inc_fs["slc_inc"]);
+        slcv_inc = atlas::array::make_view<double, 2>(inc_fs["slc_inc"]);
         upd_slc = true;
-        oops::Log::trace << "Updating slc" << std::endl;
+        oops::Log::info() << "Updating slc" << std::endl;
       }
       
       // read/construct mask for landice and snow tiles 
@@ -115,15 +124,21 @@ namespace land-apply_jedi_incr {
       std::vector<int> soil_mask(len_land_vec, 0);
       std::vector<int> ivtype(len_land_vec, -1);
       std::vector<int> istype(len_land_vec, -1);
-      std::vector<std::vector<float>> bk_bkg_stc(len_land_vec, std::vector<float>(lsoil, 0.0));
+      //std::vector<std::vector<float>> bk_bkg_stc(len_land_vec, std::vector<float>(lsoil, 0.0));
       for (int i = 0; i < len_land_vec; ++i) {
         ivtype[i] = static_cast<int>(bkg_vtype(i, 0));
         istype[i] = static_cast<int>(bkg_stype(i, 0));
-        for (int j = 0; j < lsoil; ++j) {
-            bk_bkg_stc[i][j] = bkg_stc(i, j);
-        }  
+        // for (int j = 0; j < lsoil; ++j) {bk_bkg_stc[i][j] = bkg_stc(i, j);}  
       }
       
+      auto bkg_swe = viewToVector1D(bkgv_swe);
+      auto bkg_stc = viewToVector2D(bkgv_stc);
+      auto bk_bkg_stc = viewToVector2D(bkgv_stc);
+      auto bkg_slc = viewToVector2D(bkgv_slc);
+      auto bkg_smc = viewToVector2D(bkgv_smc);
+      auto stc_inc = viewToVector2D(stcv_inc);
+      auto slc_inc = viewToVector2D(slcv_inc);
+
       // TODO: check if landfrac and icefrac are relevant for mask
       SoilIncrements::calculateLandIncrementMask(bkg_swe, ivtype, istype, 
                               len_land_vec, veg_type_landice, soil_mask);
@@ -131,8 +146,8 @@ namespace land-apply_jedi_incr {
       for (int i = 0; i < len_land_vec; ++i) {
           if (soil_mask[i] != 1) {
               for (int j = 0; j < lsoil_incr; ++j) {
-                  stc_inc(i, j) = 0.0;
-                  slc_inc(i, j) = 0.0;
+                  stc_inc[i][j] = 0.0;
+                  slc_inc[i][j] = 0.0;
               }
           }
       }
@@ -160,7 +175,9 @@ namespace land-apply_jedi_incr {
           upd_stc, upd_slc, myrank, print_summary, print_debug,
       );
 
-      // updated state
+      // update state
+      bkg_fs.toField["bkg_stc"] = bkg_stc
+
       xx.fromFieldSet(bkg_fs);      
       oops::Log::test() << "Updated State: " << xx << std::endl;
 
@@ -171,7 +188,7 @@ namespace land-apply_jedi_incr {
     }
 
    private:
-      static constexpr std::array<float, 4> zsoil = ({ -0.1, -0.4, -1.0, -2.0 });
+      static constexpr std::array<float, 4> zsoil = { -0.1, -0.4, -1.0, -2.0 };
       static constexpr int veg_type_landice = 15;
       static constexpr int lsoil = 4;     // zsoil is hard-coded for 4 layers
       static constexpr int ivegsrc = 1;   // The NOAHMP LSM expects that the ivegsrc physics parameter is 1
@@ -180,10 +197,28 @@ namespace land-apply_jedi_incr {
       bool frac_grid = true;
       float fice_threshold = 0.0;
       float lfrac_threshold = 0.0001;
+      
+      std::vector<float> viewToVector1D(const ArrayView<double, 2>& view) {
+        std::vector<float> vector1D(view.shape(0),0.0);
+        for (size_t i = 0; i < view.shape(0); ++i) {
+            vector1D[i] = static_cast<float>(view(i, 0)); 
+        }
+        return vector1D;
+      }  
+
+      std::vector<float> viewToVector2D(const ArrayView<double, 2>& view) {
+        std:vector<std::vector<float>> vector2D(view.shape(0), std::vector<float>(view.shape(1),0.0));
+        for (size_t i = 0; i < view.shape(0); ++i) {
+          for (size_t j = 0; j < view.shape(1); ++j) {
+            vector2D[i][j] = static_cast<float>(view(i, j));
+          }
+        }
+        return vector2D;
+      }
 
       // -----------------------------------------------------------------------------
-      std::string appname() const {
-        return "land-apply_jedi_incr::AddLandIncrement";
+      std::string appname() const override {
+        return "landincr::AddLandIncrement";
       }
   };
 }  // namespace land-apply_jedi_incr

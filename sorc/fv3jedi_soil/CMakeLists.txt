@@ -3,10 +3,10 @@
 ################################################################################
 
 list( APPEND sorc_files_fv3jedisoilinc
-    ./sorc/fv3jedi_soil/fv3jedi_add_land_increment.cc
-    ./sorc/fv3jedi_soil/fv3jedi_add_land_increment.h
-    ./sorc/fv3jedi_soil/soil_increments_cpp_interface.h
-    ./sorc/fv3jedi_soil/soil_increments_c.f90
+    ./fv3jedi_add_land_increment.cc
+    ./fv3jedi_add_land_increment.h
+    ./soil_increments_cpp_interface.h
+    ./soil_increments_c.f90
 )
 
 ecbuild_add_executable( TARGET          fv3jedi_soil_incr.x

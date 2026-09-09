@@ -7,6 +7,6 @@
 int main(int argc,  char ** argv) {
   oops::Run run(argc, argv);
   //AddLandIncrement<ijedi::Traits> addLandIncrement;
-  land-apply_jedi_incr::AddLandIncrement addLandIncrement;
+  landincr::AddLandIncrement addLandIncrement;
   return run.execute(addLandIncrement);
 }

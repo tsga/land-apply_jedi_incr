@@ -15,14 +15,14 @@ extern "C" {
         int* upd_stc,
         int* upd_slc,
         int* print_summary,
-        int* print_debug
+        int* print_debug,
         float* stc_state,
         float* slc_state,
         float* smc_state,
         float* stcinc,
         float* slcinc,
         int* stc_updated,
-        int* slc_updated,
+        int* slc_updated
     );
 
     void c_apply_land_da_adjustments_soil(
@@ -96,7 +96,7 @@ public:
         const std::vector<float>& stcinc,       // (lensfc, lsoil)
         const std::vector<float>& slcinc,       // (lensfc, lsoil)
         std::vector<int>& stc_updated,          // (lensfc)
-        std::vector<int>& slc_updated,          // (lensfc)
+        std::vector<int>& slc_updated          // (lensfc)
     ) {
         int i_myrank = myrank;
         int i_lsoil = lsoil;
@@ -116,7 +116,7 @@ public:
             &i_upd_stc,
             &i_upd_slc,
             &i_print_summary,
-            &i_print_debug
+            &i_print_debug,
             stc_state.data(),
             slc_state.data(),
             smc_state.data(),

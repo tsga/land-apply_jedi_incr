@@ -4,7 +4,7 @@
 !! @author Clara Draper ESRL/PSL
 !! Tseganeh ZG April 2026 bring soil specific parts close to snow DA incrments code in GDASApp
 
-module soil_increments
+module soil_increments_c
     use iso_c_binding, only: c_int, c_float, c_bool, c_char
     implicit none
 
@@ -17,6 +17,7 @@ module soil_increments
     ! C-interoperable interfaces
     public :: c_add_increment_soil
     public :: c_apply_land_da_adjustments_soil
+    public :: c_calculate_landinc_mask
 
     integer, parameter       :: lsm_noahmp=2      !< flag for NOAHMP land surface model
     real, parameter          :: tfreez=273.16 !< con_t0c  in physcons
@@ -210,7 +211,7 @@ subroutine c_add_increment_soil(myrank, lsoil, lsoil_incr, lensfc, &
     ! Call the original Fortran subroutine
     call add_increment_soil(myrank, lsoil, lsoil_incr, lensfc, &
                               soilsnow_tile, logical(upd_stc /= 0), logical(upd_slc /= 0), &
-                              logical(print_summary /= 0), logical(print_debug /= 0) &
+                              logical(print_summary /= 0), logical(print_debug /= 0), &
                               stc_state, slc_state, smc_state, stcinc, slcinc, &
                               stc_updated, slc_updated)
 
@@ -258,12 +259,12 @@ subroutine calculate_landinc_mask(swe,vtype,stype,lensfc,veg_type_landice,mask)
 end subroutine calculate_landinc_mask
 
 ! c interoperable wrapper for calculate_landinc_mask
-subroutine c_calculate_landinc_mask(swe,vtype,stype,lensfc,veg_type_landice,mask) &
-  bind(C, name="c_calculate_landinc_mask")
+subroutine c_calculate_landinc_mask(swe,vtype,stype,lensfc,veg_type_landice,mask) bind(C, name="c_calculate_landinc_mask")
+
     implicit none       
     
     integer(c_int), intent(in)           :: lensfc, veg_type_landice
-    real(c_double), intent(in)           :: swe(lensfc)
+    real(c_float), intent(in)            :: swe(lensfc)
     integer(c_int), intent(in)           :: vtype(lensfc),stype(lensfc)
     integer(c_int), intent(out)          :: mask(lensfc)
 
@@ -324,8 +325,6 @@ subroutine apply_land_da_adjustments_soil(lsoil_incr, isot, ivegsrc,lensfc, &
                  stc_updated, slc_updated, zsoil, upd_stc, upd_slc, myrank, print_summary, print_debug)
 
     use mpi
-    use set_soilveg_snippet_mod, only: set_soilveg_noah,set_soilveg_noahmp
-    use sflx_snippet,    only: frh2o
 
     implicit none
  
@@ -437,8 +436,6 @@ subroutine c_apply_land_da_adjustments_soil(lsoil_incr, isot, ivegsrc, lensfc, l
                                             myrank, print_summary, print_debug) &
                       bind(C, name="c_apply_land_da_adjustments_soil")
     use mpi
-    use set_soilveg_snippet_mod, only: set_soilveg_noah,set_soilveg_noahmp
-    use sflx_snippet,    only: frh2o
     
     integer(c_int), value              :: lsoil_incr, isot, ivegsrc, lensfc, lsoil, myrank
     integer(c_int), value              :: upd_stc, upd_slc, print_summary, print_debug
@@ -762,4 +759,4 @@ end subroutine c_apply_land_da_adjustments_soil
   end subroutine set_soilveg_noahmp
 
 
-end module soil_increments
+end module soil_increments_c
