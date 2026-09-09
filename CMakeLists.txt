@@ -1,120 +1,25 @@
-# (C) Copyright 2022 .
-#
-# This software is licensed under the terms of the Apache Licence Version 2.0
-# which can be obtained at http://www.apache.org/licenses/LICENSE-2.0.
-
-
 cmake_minimum_required( VERSION 3.12)
-project( jediincr VERSION 2022.10 LANGUAGES Fortran )
+project(fv3jedisoil LANGUAGES Fortran C CXX )
 
-# ecbuild integration
-find_package(ecbuild 3.3.2 REQUIRED)
-include( ecbuild_system NO_POLICY_SCOPE )
-ecbuild_declare_project()
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
+set(CMAKE_FORTRAN_STANDARD 08)
+set(CMAKE_FORTRAN_STANDARD_REQUIRED ON)
+set(CMAKE_FORTRAN_EXTENSIONS OFF)
 
-list( APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
-include( jediincr_compiler_flags )
+if(CMAKE_Fortran_COMPILER_ID MATCHES "^(GNU)$")
+  set(CMAKE_Fortran_FLAGS "${CMAKE_Fortran_FLAGS} -ffree-line-length-0")
+endif()
 
-################################################################################
-# Dependencies
-################################################################################
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake/Modules)
 
-find_package(OpenMP COMPONENTS C Fortran)
-find_package(MPI REQUIRED COMPONENTS C Fortran)
-find_package(NetCDF REQUIRED COMPONENTS Fortran )
+find_package(NetCDF REQUIRED COMPONENTS CXX Fortran)
+find_package(oops)
+find_package(fv3jedi)
+find_package(MPI REQUIRED Fortran)
 
-#add_definitions ( -DCPP=0 )
-
-set( JEDIINCR_LINKER_LANGUAGE Fortran )
-
-# public_libs: snow and soil incr
-set( PUBLIC_LIBS
-    NetCDF::NetCDF_Fortran
-    MPI::MPI_Fortran
-    OpenMP::OpenMP_C
-    OpenMP::OpenMP_Fortran
-)
-
-set( MODULE_DIR ${CMAKE_BINARY_DIR}/module )
-
-################################################################################
-# jediincr_snow
-################################################################################
-
-list ( APPEND sorc_files_snowinc
-./sorc/snow/NoahMPdisag_module.f90
-)
-
-ecbuild_add_library( TARGET   jediincr_snow
-                     SOURCES  ${sorc_files_snowinc}
-                     INSTALL_HEADERS LISTED
-                     LINKER_LANGUAGE ${JEDIINCR_LINKER_LANGUAGE}
-                    )
-
-target_link_libraries(jediincr_snow PUBLIC ${PUBLIC_LIBS})
-
-#target_compile_options(jediincr PRIVATE  -r8 -init=huge -cpp, -DCCPP=.false. )
-
-set_target_properties(jediincr_snow PROPERTIES Fortran_MODULE_DIRECTORY ${MODULE_DIR}/snow_inc)
-target_include_directories(jediincr_snow PUBLIC $<BUILD_INTERFACE:${MODULE_DIR}/snow_inc>)
-
-# jedi_incr_snow.exe
-set ( snow_exe_files ./sorc/snow/apply_incr_noahmp_snow.f90 )
-
-ecbuild_add_executable( TARGET   apply_incr.exe
-                        SOURCES  ${snow_exe_files}
-                        LIBS     jediincr_snow
-                        LINKER_LANGUAGE ${JEDIINCR_LINKER_LANGUAGE}
-                       )
-
-################################################################################
-# jediincr_soil
-################################################################################
-
-list( APPEND sorc_files_soilinc
-    ./sorc/soil/soil_increments.f90
-    ./sorc/soil/set_soilveg_snippet.f90
-    ./sorc/soil/sflx_snippet.f90
-)
-
-ecbuild_add_library( TARGET          jediincr_soil
-                     SOURCES         ${sorc_files_soilinc}
-                     INSTALL_HEADERS LISTED
-                     LINKER_LANGUAGE ${JEDIINCR_LINKER_LANGUAGE}
-                    )
-
-target_link_libraries(jediincr_soil PUBLIC ${PUBLIC_LIBS})
-
-set_target_properties(jediincr_soil PROPERTIES Fortran_MODULE_DIRECTORY ${MODULE_DIR}/soil_inc)
-target_include_directories(jediincr_soil PUBLIC $<BUILD_INTERFACE:${MODULE_DIR}/soil_inc>)
-
-set( soil_exe_files ./sorc/soil/apply_incr_noahmp_soil.f90 )
-
-ecbuild_add_executable( TARGET          apply_soil_incr.x
-                        SOURCES         ${soil_exe_files}
-                        LIBS            jediincr_soil
-                        LINKER_LANGUAGE ${JEDIINCR_LINKER_LANGUAGE}
-                       )
-
-################################################################################
-# fv3jedi_soil_incr
-################################################################################
-
-list( APPEND sorc_files_fv3jedisoilinc
-    ./sorc/fv3jedi_soil/fv3jedi_add_land_increment.cc
-    ./sorc/fv3jedi_soil/fv3jedi_add_land_increment.h
-    ./sorc/fv3jedi_soil/soil_increments_cpp_interface.h
-    ./sorc/fv3jedi_soil/soil_increments_c.f90
-)
-
-ecbuild_add_executable( TARGET          fv3jedi_soil_incr.x
-                        SOURCES         ${sorc_files_fv3jedisoilinc} )
-target_compile_features( fv3jedi_soil_incr.x PUBLIC cxx_std_17)
-target_link_libraries( fv3jedi_soil_incr.x PUBLIC ${PUBLIC_LIBS} NetCDF::NetCDF_CXX oops atlas fv3jedi)
-
-################################################################################
-# Finalise configuration
-################################################################################
-
-ecbuild_install_project( NAME jediincr )
-ecbuild_print_summary()
+add_subdirectory( sorc/fv3jedi_soil )
