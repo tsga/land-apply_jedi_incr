@@ -1,5 +1,5 @@
 cmake_minimum_required( VERSION 3.12)
-project(fv3jedisoil LANGUAGES Fortran C CXX )
+project(landincr LANGUAGES Fortran C CXX )
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
