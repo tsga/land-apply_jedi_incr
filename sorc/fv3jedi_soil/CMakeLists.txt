@@ -3,8 +3,8 @@
 ################################################################################
 
 list( APPEND sorc_files_fv3jedisoilinc
-    ./fv3jedi_add_land_increment.cc
-    ./fv3jedi_add_land_increment.h
+    ./fv3jedi_add_soil_increment.cc
+    ./fv3jedi_add_soil_increment.h
     ./soil_increments_cpp_interface.h
     ./soil_increments_c.f90
 )
