@@ -102,33 +102,31 @@ namespace landincr {
       atlas::FieldSet inc_fs;
       dx.toFieldSet(inc_fs);
 
-      atlas::array::ArrayView<double, 2> stcv_inc;
+      std::vector<std::vector<float>> stc_inc;
       if (bkg_fs.has("stc_inc")) {
-        stcv_inc = atlas::array::make_view<double, 2>(bkg_fs["stc_inc"]);
+        auto stcv_inc = atlas::array::make_view<double, 2>(bkg_fs["stc_inc"]);
+        stc_inc = viewToVector2D(stcv_inc);
         upd_stc = true;
         oops::Log::info() << "Updating stc" << std::endl;
       }
-
-      atlas::array::ArrayView<double, 2> slcv_inc;
+      
+      std::vector<std::vector<float>> slc_inc;
       if (inc_fs.has("slc_inc")) {
-        slcv_inc = atlas::array::make_view<double, 2>(inc_fs["slc_inc"]);
+        auto slcv_inc = atlas::array::make_view<double, 2>(inc_fs["slc_inc"]);
+        slc_inc = viewToVector2D(slcv_inc);
         upd_slc = true;
         oops::Log::info() << "Updating slc" << std::endl;
       }
-      
-      // read/construct mask for landice and snow tiles 
+
+       // read/construct mask for landice and snow tiles
       int lsoil_incr = 2;
       fullConfig.get("lsoil_incr", lsoil_incr);
       int len_land_vec = bkg_fs["sheleg"].shape(0);
-      // std::vector<int> mask_landice(geom_.nlevsfc(), 0);
-      std::vector<int> soil_mask(len_land_vec, 0);
       std::vector<int> ivtype(len_land_vec, -1);
       std::vector<int> istype(len_land_vec, -1);
-      //std::vector<std::vector<float>> bk_bkg_stc(len_land_vec, std::vector<float>(lsoil, 0.0));
       for (int i = 0; i < len_land_vec; ++i) {
         ivtype[i] = static_cast<int>(bkg_vtype(i, 0));
         istype[i] = static_cast<int>(bkg_stype(i, 0));
-        // for (int j = 0; j < lsoil; ++j) {bk_bkg_stc[i][j] = bkg_stc(i, j);}  
       }
       
       auto bkg_swe = viewToVector1D(bkgv_swe);
@@ -136,9 +134,10 @@ namespace landincr {
       auto bk_bkg_stc = viewToVector2D(bkgv_stc);
       auto bkg_slc = viewToVector2D(bkgv_slc);
       auto bkg_smc = viewToVector2D(bkgv_smc);
-      auto stc_inc = viewToVector2D(stcv_inc);
-      auto slc_inc = viewToVector2D(slcv_inc);
 
+      // read/construct mask for landice and snow tiles
+      // std::vector<int> mask_landice(geom_.nlevsfc(), 0);
+      std::vector<int> soil_mask(len_land_vec, 0);
       // TODO: check if landfrac and icefrac are relevant for mask
       SoilIncrements::calculateLandIncrementMask(bkg_swe, ivtype, istype, 
                               len_land_vec, veg_type_landice, soil_mask);
@@ -172,11 +171,17 @@ namespace landincr {
           istype, soil_mask, 
           bk_bkg_stc, bkg_stc, bkg_smc, bkg_slc,
           stc_updated, slc_updated, zsoil,
-          upd_stc, upd_slc, myrank, print_summary, print_debug,
+          upd_stc, upd_slc, myrank, print_summary, print_debug
       );
 
       // update state
-      bkg_fs.toField["bkg_stc"] = bkg_stc
+      for (size_t i = 0; i < bkg_stc.size(); ++i) {
+        for (size_t j = 0; j < bkg_stc[i].size(); ++j) {
+          bkgv_stc(i, j) = static_cast<double>(bkg_stc[i][j]);
+          bkgv_slc(i, j) = static_cast<double>(bkg_slc[i][j]);
+	  bkgv_smc(i, j) = static_cast<double>(bkg_smc[i][j]);
+        }
+      }
 
       xx.fromFieldSet(bkg_fs);      
       oops::Log::test() << "Updated State: " << xx << std::endl;
@@ -198,7 +203,7 @@ namespace landincr {
       float fice_threshold = 0.0;
       float lfrac_threshold = 0.0001;
       
-      std::vector<float> viewToVector1D(const ArrayView<double, 2>& view) {
+      std::vector<float> viewToVector1D(const atlas::array::ArrayView<double, 2>& view) const {
         std::vector<float> vector1D(view.shape(0),0.0);
         for (size_t i = 0; i < view.shape(0); ++i) {
             vector1D[i] = static_cast<float>(view(i, 0)); 
@@ -206,8 +211,8 @@ namespace landincr {
         return vector1D;
       }  
 
-      std::vector<float> viewToVector2D(const ArrayView<double, 2>& view) {
-        std:vector<std::vector<float>> vector2D(view.shape(0), std::vector<float>(view.shape(1),0.0));
+       std::vector<std::vector<float>> viewToVector2D(const atlas::array::ArrayView<double, 2>& view) const {
+	std::vector<std::vector<float>> vector2D(view.shape(0), std::vector<float>(view.shape(1),0.0));
         for (size_t i = 0; i < view.shape(0); ++i) {
           for (size_t j = 0; j < view.shape(1); ++j) {
             vector2D[i][j] = static_cast<float>(view(i, j));

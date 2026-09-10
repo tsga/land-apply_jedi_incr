@@ -16,11 +16,11 @@ extern "C" {
         int* upd_slc,
         int* print_summary,
         int* print_debug,
-        float* stc_state,
-        float* slc_state,
-        float* smc_state,
-        float* stcinc,
-        float* slcinc,
+        float** stc_state,
+        float** slc_state,
+        float** smc_state,
+        float** stcinc,
+        float** slcinc,
         int* stc_updated,
         int* slc_updated
     );
@@ -33,10 +33,10 @@ extern "C" {
         int* lsoil,
         int* isoiltype,
         int* mask,
-        float* stc_bck,
-        float* stc_adj,
-        float* smc_adj,
-        float* slc_adj,
+        float** stc_bck,
+        float** stc_adj,
+        float** smc_adj,
+        float** slc_adj,
         int* stc_updated,
         int* slc_updated,
         float* zsoil,
@@ -90,11 +90,11 @@ public:
         bool upd_slc,
         bool print_summary,
         bool print_debug,
-        std::vector<float>& stc_state,          // (lensfc, lsoil)
-        std::vector<float>& slc_state,          // (lensfc, lsoil)
-        std::vector<float>& smc_state,          // (lensfc, lsoil)
-        const std::vector<float>& stcinc,       // (lensfc, lsoil)
-        const std::vector<float>& slcinc,       // (lensfc, lsoil)
+        std::vector<std::vector<float>>& stc_state,          // (lensfc, lsoil)
+        std::vector<std::vector<float>>& slc_state,          // (lensfc, lsoil)
+        std::vector<std::vector<float>>& smc_state,          // (lensfc, lsoil)
+        std::vector<std::vector<float>>& stc_inc,       // (lensfc, lsoil)
+        std::vector<std::vector<float>>& slc_inc,       // (lensfc, lsoil)
         std::vector<int>& stc_updated,          // (lensfc)
         std::vector<int>& slc_updated          // (lensfc)
     ) {
@@ -106,6 +106,20 @@ public:
         int i_upd_slc = upd_slc ? 1 : 0;
         int i_print_summary = print_summary ? 1 : 0;
         int i_print_debug = print_debug ? 1 : 0;
+        
+        std::vector<float*> stc_state_p(stc_state.size());
+        std::vector<float*> slc_state_p(stc_state.size());
+	std::vector<float*> smc_state_p(stc_state.size());
+	std::vector<float*> stc_inc_p(stc_state.size());
+	std::vector<float*> slc_inc_p(stc_state.size());
+
+        for (size_t i = 0; i < stc_state.size(); ++i) {
+          stc_state_p[i] = stc_state[i].data();
+	  slc_state_p[i] = slc_state[i].data();
+	  smc_state_p[i] = smc_state[i].data();
+	  stc_inc_p[i] = stc_inc[i].data();
+	  slc_inc_p[i] = slc_inc[i].data();
+        }
 
         c_add_increment_soil(
             &i_myrank,
@@ -117,11 +131,11 @@ public:
             &i_upd_slc,
             &i_print_summary,
             &i_print_debug,
-            stc_state.data(),
-            slc_state.data(),
-            smc_state.data(),
-            const_cast<float*>(stcinc.data()),
-            const_cast<float*>(slcinc.data()),
+            stc_state_p.data(),
+            slc_state_p.data(),
+            smc_state_p.data(),
+            stc_inc_p.data(),  //const_cast<float*>(stcinc.data()),
+            slc_inc_p.data(),  //const_cast<float*>(slcinc.data()),
             stc_updated.data(),
             slc_updated.data()
         );
@@ -135,10 +149,10 @@ public:
         int lsoil,
         const std::vector<int>& isoiltype,      // (lensfc)
         const std::vector<int>& mask,           // (lensfc)
-        const std::vector<float>& stc_bck,      // (lensfc, lsoil)
-        std::vector<float>& stc_adj,            // (lensfc, lsoil)
-        std::vector<float>& smc_adj,            // (lensfc, lsoil)
-        std::vector<float>& slc_adj,            // (lensfc, lsoil)
+        std::vector<std::vector<float>>& stc_bck,      // (lensfc, lsoil)
+        std::vector<std::vector<float>>& stc_adj,            // (lensfc, lsoil)
+        std::vector<std::vector<float>>& smc_adj,            // (lensfc, lsoil)
+        std::vector<std::vector<float>>& slc_adj,            // (lensfc, lsoil)
         const std::vector<int>& stc_updated,    // (lensfc)
         const std::vector<int>& slc_updated,    // (lensfc)
         const std::array<float, 4>& zsoil,      // (lsoil)
@@ -163,6 +177,18 @@ public:
         float zsoil_copy[4];
         std::copy(zsoil.begin(), zsoil.end(), zsoil_copy);
 
+        std::vector<float*> stc_bck_p(stc_bck.size());
+        std::vector<float*> stc_adj_p(stc_adj.size());
+        std::vector<float*> smc_adj_p(smc_adj.size());
+        std::vector<float*> slc_adj_p(slc_adj.size());
+
+        for (size_t i = 0; i < stc_bck.size(); ++i) {
+          stc_bck_p[i] = stc_bck[i].data();
+	  stc_adj_p[i] = stc_adj[i].data();
+          slc_adj_p[i] = slc_adj[i].data();
+          smc_adj_p[i] = smc_adj[i].data();
+        }
+
         c_apply_land_da_adjustments_soil(
             &i_lsoil_incr,
             &i_isot,
@@ -171,10 +197,10 @@ public:
             &i_lsoil,
             const_cast<int*>(isoiltype.data()),
             const_cast<int*>(mask.data()),
-            const_cast<float*>(stc_bck.data()),
-            stc_adj.data(),
-            smc_adj.data(),
-            slc_adj.data(),
+            stc_bck_p.data(),
+            stc_adj_p.data(),
+            smc_adj_p.data(),
+            slc_adj_p.data(),
             const_cast<int*>(stc_updated.data()),
             const_cast<int*>(slc_updated.data()),
             zsoil_copy,
