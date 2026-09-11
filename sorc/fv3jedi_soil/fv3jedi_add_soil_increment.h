@@ -44,12 +44,14 @@ namespace landincr {
       // Read state
       // ijedi::State<ijedi::Traits> xx(geom_, eckit::LocalConfiguration(fullConfig, "background state"));
       fv3jedi::State xx(geom_, eckit::LocalConfiguration(fullConfig, "background state"));
-      oops::Log::test() << "State: " << xx << std::endl;
+      oops::Log::test() << "Background state: " << xx << std::endl;
 
       // Read increment
       const eckit::LocalConfiguration incParams(fullConfig, "increment");
-      oops::Variables incVars(incParams, "variables");
+      int lsoil_incr = 2;
+      incParams.get("lsoil_incr", lsoil_incr);
 
+      oops::Variables incVars(incParams, "variables");
       // ijedi::Increment<ijedi::Traits> dx(geom_, incVars, xx.validTime());
       fv3jedi::Increment dx(geom_, incVars, xx.validTime());
       dx.read(incParams);
@@ -97,14 +99,40 @@ namespace landincr {
           throw eckit::BadValue("Missing required fields in state FieldSet", Here());
       }
       auto bkgv_smc = atlas::array::make_view<double, 2>(bkg_fs["smc"]);
-         
+      
+      // vtype and stype to integers
+      int len_land_vec = bkg_fs["sheleg"].shape(0);
+      std::vector<int> ivtype(len_land_vec, -1);
+      std::vector<int> istype(len_land_vec, -1);
+      for (int i = 0; i < len_land_vec; ++i) {
+        ivtype[i] = static_cast<int>(bkg_vtype(i, 0));
+        istype[i] = static_cast<int>(bkg_stype(i, 0));
+      }
+      // state vectors. TODO: do this in the fort-cpp interface
+      auto bkg_swe = viewToVector1D(bkgv_swe);
+      auto bkg_stc = viewToVector2D(bkgv_stc);
+      auto bk_bkg_stc = viewToVector2D(bkgv_stc);
+      auto bkg_slc = viewToVector2D(bkgv_slc);
+      auto bkg_smc = viewToVector2D(bkgv_smc); 
+
+      // Read increment
+      const eckit::LocalConfiguration incParams(fullConfig, "increment");
+      int lsoil_incr = 2;
+      incParams.get("lsoil_incr", lsoil_incr);
+
+      oops::Variables incVars(incParams, "variables");
+      // ijedi::Increment<ijedi::Traits> dx(geom_, incVars, xx.validTime());
+      fv3jedi::Increment dx(geom_, incVars, xx.validTime());
+      dx.read(incParams);
+      oops::Log::test() << "Increment: " << dx << std::endl;
+
       bool upd_stc = false, upd_slc = false;
       atlas::FieldSet inc_fs;
       dx.toFieldSet(inc_fs);
 
       std::vector<std::vector<float>> stc_inc;
       if (bkg_fs.has("stc_inc")) {
-        auto stcv_inc = atlas::array::make_view<double, 2>(bkg_fs["stc_inc"]);
+        auto stcv_inc = atlas::array::make_view<double, 2>(inc_fs["stc_inc"]);
         stc_inc = viewToVector2D(stcv_inc);
         upd_stc = true;
         oops::Log::info() << "Updating stc" << std::endl;
@@ -117,23 +145,6 @@ namespace landincr {
         upd_slc = true;
         oops::Log::info() << "Updating slc" << std::endl;
       }
-
-       // read/construct mask for landice and snow tiles
-      int lsoil_incr = 2;
-      fullConfig.get("lsoil_incr", lsoil_incr);
-      int len_land_vec = bkg_fs["sheleg"].shape(0);
-      std::vector<int> ivtype(len_land_vec, -1);
-      std::vector<int> istype(len_land_vec, -1);
-      for (int i = 0; i < len_land_vec; ++i) {
-        ivtype[i] = static_cast<int>(bkg_vtype(i, 0));
-        istype[i] = static_cast<int>(bkg_stype(i, 0));
-      }
-      
-      auto bkg_swe = viewToVector1D(bkgv_swe);
-      auto bkg_stc = viewToVector2D(bkgv_stc);
-      auto bk_bkg_stc = viewToVector2D(bkgv_stc);
-      auto bkg_slc = viewToVector2D(bkgv_slc);
-      auto bkg_smc = viewToVector2D(bkgv_smc);
 
       // read/construct mask for landice and snow tiles
       // std::vector<int> mask_landice(geom_.nlevsfc(), 0);
