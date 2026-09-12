@@ -367,4 +367,309 @@ subroutine apply_land_da_adjustments_soil(lsoil_incr, isot, ivegsrc,lensfc, &
 
 end subroutine apply_land_da_adjustments_soil
 
+!! @brief Snippets of noah model from sflx.F needed for land DA updates 
+!! 
+!! @author Clara Draper
+
+!> Calculate the liquid water (slc) for a given total moisture content 
+!! and soil temperature. Used here to update slc when DA update to stc 
+!! crosses freezing. Note this is an approximation, since in sflx.F (noah) 
+!! the change in slc estimated by this routine is often clipped,
+!! depending on the net energy input to the soil layer. Also, this 
+!! routine is being called using stc, but in sflx.F it is called using 
+!! the soil temp at the midpoint of the layer. However, testing shows 
+!! the affects of these approximations is small (O(0.001 m3/m3)).
+!! @param[in] tkelv Soil temperature in K
+!! @param[in] smc Soil moisture 
+!! @param[in] sh2o Input liquid soil moisture
+!! @param[in] smcmax Max soil moisture
+!! @param[in] bexp B exponent 
+!! @param[in] psis Saturated matric potential
+!! @param[out]  liqwat Output liquid soil moisture
+  subroutine frh2o                                                  &
+!  ---  inputs:
+    &     ( tkelv, smc, sh2o, smcmax, bexp, psis,                      &
+!  ---  outputs:
+    &       liqwat                                                     &
+    &     )
+
+! ===================================================================== !
+!  description:                                                         !
+!                                                                       !
+!  subroutine frh2o calculates amount of supercooled liquid soil water  !
+!  content if temperature is below 273.15k (t0).  requires newton-type  !
+!  iteration to solve the nonlinear implicit equation given in eqn 17   !
+!  of koren et al (1999, jgr, vol 104(d16), 19569-19585).               !
+!                                                                       !
+!  new version (june 2001): much faster and more accurate newton        !
+!  iteration achieved by first taking log of eqn cited above -- less    !
+!  than 4 (typically 1 or 2) iterations achieves convergence.  also,    !
+!  explicit 1-step solution option for special case of parameter ck=0,  !
+!  which reduces the original implicit equation to a simpler explicit   !
+!  form, known as the "flerchinger eqn". improved handling of solution  !
+!  in the limit of freezing point temperature t0.                       !
+!                                                                       !
+!  subprogram called:  none                                             !
+!                                                                       !
+!                                                                       !
+!  ====================  defination of variables  ====================  !
+!                                                                       !
+!  inputs:                                                       size   !
+!     tkelv    - real, temperature (k)                             1    !
+!     smc      - real, total soil moisture content (volumetric)    1    !
+!     sh2o     - real, liquid soil moisture content (volumetric)   1    !
+!     smcmax   - real, saturation soil moisture content            1    !
+!     bexp     - real, soil type "b" parameter                     1    !
+!     psis     - real, saturated soil matric potential             1    !
+!                                                                       !
+!  outputs:                                                             !
+!     liqwat   - real, supercooled liquid water content            1    !
+!                                                                       !
+!  ====================    end of description    =====================  !
+!
+!  ---  constant parameters:
+
+! this block added from physconst.f for snippet
+
+    implicit none
+
+    real, parameter :: gs2     = 9.81        !< con_g in snowpack, frh2o
+    real, parameter :: tfreez  = 2.7315e+2
+    real, parameter :: lsubf   = 3.335e5     !< con_hfus=3.3358e+5
+! end block added for snippet
+
+    real, parameter :: ck    = 8.0
+    real, parameter :: blim  = 5.5
+    real, parameter :: error = 0.005
+
+!  ---  inputs:
+    real, intent(in) :: tkelv, smc, sh2o, smcmax, bexp, psis
+
+!  ---  outputs:
+    real, intent(out) :: liqwat
+
+!  ---  locals:
+    real :: bx, denom, df, dswl, fk, swl, swlk
+
+    integer :: nlog, kcount
+!
+!===> ...  begin here
+!
+!  --- ...  limits on parameter b: b < 5.5  (use parameter blim)
+!           simulations showed if b > 5.5 unfrozen water content is
+!           non-realistically high at very low temperatures.
+
+    bx = bexp
+    if (bexp > blim)  bx = blim
+
+!  --- ...  initializing iterations counter and iterative solution flag.
+
+    nlog  = 0
+    kcount= 0
+
+!  --- ...  if temperature not significantly below freezing (t0), sh2o = smc
+
+    if (tkelv > (tfreez-1.e-3)) then
+
+      liqwat = smc
+
+    else
+
+      if (ck /= 0.0) then
+
+!  --- ...  option 1: iterated solution for nonzero ck
+!                     in koren et al, jgr, 1999, eqn 17
+
+!  --- ...  initial guess for swl (frozen content)
+
+        swl = smc - sh2o
+
+!  --- ...  keep within bounds.
+
+        swl = max( min( swl, smc-0.02 ), 0.0 )
+
+!  --- ...  start of iterations
+
+        do while ( (nlog < 10) .and. (kcount == 0) )
+          nlog = nlog + 1
+
+          df = alog( (psis*gs2/lsubf) * ( (1.0 + ck*swl)**2.0 )      &
+            * (smcmax/(smc-swl))**bx ) - alog(-(tkelv-tfreez)/tkelv)
+
+          denom = 2.0*ck/(1.0 + ck*swl) + bx/(smc - swl)
+          swlk  = swl - df/denom
+
+!  --- ...  bounds useful for mathematical solution.
+
+          swlk = max( min( swlk, smc-0.02 ), 0.0 )
+
+!  --- ...  mathematical solution bounds applied.
+
+          dswl = abs(swlk - swl)
+          swl = swlk
+
+!  --- ...  if more than 10 iterations, use explicit method (ck=0 approx.)
+!           when dswl less or eq. error, no more iterations required.
+
+          if ( dswl <= error )  then
+            kcount = kcount + 1
+          endif
+        enddo   !  end do_while_loop
+
+!  --- ...  bounds applied within do-block are valid for physical solution.
+
+        liqwat = smc - swl
+
+      endif   ! end if_ck_block
+
+!  --- ...  option 2: explicit solution for flerchinger eq. i.e. ck=0
+!                     in koren et al., jgr, 1999, eqn 17
+!           apply physical bounds to flerchinger solution
+
+      if (kcount == 0) then
+        fk = ( ( (lsubf/(gs2*(-psis)))                   & 
+          * ((tkelv-tfreez)/tkelv) )**(-1/bx) ) * smcmax
+
+        fk = max( fk, 0.02 )
+
+        liqwat = min( fk, smc )
+      endif
+
+    endif   ! end if_tkelv_block
+!
+    return
+!...................................
+  end subroutine frh2o
+
+
+!> @brief Routines to set Noah LSM soil and veg params needed for sflx_snippet
+!> @author Clara Draper
+
+!> Below were extracted from namelist_soilveg.f and set_soilveg.f 
+!! (couldn't get above to compile for doxygen)
+
+!> This subroutine initializes soil and vegetation
+!! parameters needed in global_cycle/land_increment.f90 
+!! @param[in] isot Soil type
+!! @param[in] ivet Vegetation type
+!! @param[out] maxsmc Maximum soil moisture for each soil type
+!! @param[out] bb B exponent for each soil type
+!! @param[out] satpsi Saturated matric potential for each soil type
+!! @param[out] iret Return integer
+  subroutine set_soilveg_noah(isot,ivet, maxsmc, bb, satpsi, iret) 
+    implicit none
+
+    integer, intent(in) :: isot,ivet
+    real, dimension(30), intent(out)  :: maxsmc, bb, satpsi
+    integer, intent(out) :: iret
+
+    ! set vegetation-dependent params (May 2021, UFS uses ivet=1) 
+    ! Draper, not needed for now, but might need SNUPX 
+    ! for SWE-> SCF calculation later
+    ! 
+    !      if(ivet.eq.1)then
+
+      !defined_veg=20
+    ! might want this later
+    ! SNUPX  =(/0.080, 0.080, 0.080, 0.080, 0.080, 0.020,
+    !*             0.020, 0.060, 0.040, 0.020, 0.010, 0.020,
+    !*             0.020, 0.020, 0.013, 0.013, 0.010, 0.020,
+    !&             0.020, 0.020, 0.000, 0.000, 0.000, 0.000,
+    !&             0.000, 0.000, 0.000, 0.000, 0.000, 0.000/)
+
+    !      endif
+
+    ! set soil-dependent params (May 2021, UFS uses isot=1) 
+
+    if (isot .eq. 1) then
+
+  ! using stasgo table
+    BB         =(/4.05,  4.26, 4.74, 5.33, 5.33,  5.25, &
+              6.77,  8.72,  8.17, 10.73, 10.39,  11.55,&
+              5.25,  4.26,  4.05, 4.26,  11.55,  4.05, & 
+              4.05,  0.00,  0.00, 0.00,  0.00,  0.00,  & 
+              0.00,  0.00,  0.00, 0.00,  0.00,  0.00/)
+  ! Draper, these are provided for reference only, and 
+  ! may be useful for later SMC updates
+  !      DRYSMC=(/0.010, 0.025, 0.010, 0.010, 0.010, 0.010,
+  !     &            0.010, 0.010, 0.010, 0.010, 0.010, 0.010,
+  !     &            0.010, 0.010, 0.010, 0.010, 0.010, 0.010,
+  !     &            0.010, 0.000, 0.000, 0.000, 0.000, 0.000,
+  !     &            0.000, 0.000, 0.000, 0.000, 0.000, 0.000/)
+
+    MAXSMC=(/0.395, 0.421, 0.434, 0.476, 0.476, 0.439,   & 
+              0.404, 0.464, 0.465, 0.406, 0.468, 0.457, &
+              0.464, 0.421, 0.200, 0.421, 0.457, 0.200, & 
+              0.395, 0.000, 0.000, 0.000, 0.000, 0.000, & 
+              0.000, 0.000, 0.000, 0.000, 0.000, 0.000/)
+
+    SATPSI=(/0.035, 0.0363, 0.1413, 0.7586, 0.7586, 0.3548,   & 
+              0.1349, 0.6166, 0.2630, 0.0977, 0.3236, 0.4677,&
+              0.3548, 0.0363, 0.0350, 0.0363, 0.4677, 0.0350,&
+              0.0350, 0.00, 0.00, 0.00, 0.00, 0.00,          &
+              0.00, 0.00, 0.00, 0.00, 0.00, 0.00/)
+
+  !defined_soil=19
+    else 
+          print *, 'set_soilveg_snippet not coded for soil type ', isot
+          iret = -1
+          return
+    endif 
+    
+    iret = 0
+
+  end subroutine set_soilveg_noah
+
+  !> Add Noah-MP LSM soil and veg params needed for global_cycle
+  !> Noah-MP related parameters were extracted from noahmp_table.f
+  !> isot (soil type) = 1: STATSGO must be selected if NoahMP is used
+  !> ivet (vegetation type) = 1: IBGP is used by UFS offline Land DA for Noah-MP
+  !> as of 07/13/2023
+  !> @author Yuan Xue
+
+  !> This subroutine initializes soil and vegetation
+  !! parameters needed in global_cycle/land_increment.f90 for noah-mp
+  !! @param[in] isot Soil type
+  !! @param[in] ivet Vegetation type
+  !! @param[out] maxsmc Maximum soil moisture for each soil type
+  !! @param[out] bb B exponent for each soil type
+  !! @param[out] satpsi Saturated matric potential for each soil type
+  !! @param[out] iret Return integer
+  subroutine set_soilveg_noahmp(isot,ivet, maxsmc, bb, satpsi,iret)
+
+    implicit none
+
+    integer, intent(in) :: isot,ivet !ivet is *not* used for now
+    real, dimension(30), intent(out)  :: maxsmc, bb, satpsi
+    integer, intent(out) :: iret
+
+    if (isot .eq. 1) then
+
+    ! set soil-dependent params (STATSGO is the only option for UFS, 07/13/2023)
+      maxsmc= (/0.339, 0.421, 0.434, 0.476, 0.484,&
+        &   0.439, 0.404, 0.464, 0.465, 0.406, 0.468, 0.468,                    &
+        &   0.439, 1.000, 0.200, 0.421, 0.468, 0.200,                           &
+        &   0.339, 0.339, 0.000, 0.000, 0.000, 0.000,                           &
+        &  0.000, 0.000, 0.000, 0.000, 0.000, 0.000/)
+      bb= (/2.79,  4.26, 4.74, 5.33, 3.86,  5.25,&
+        &    6.77,  8.72,  8.17, 10.73,  10.39, 11.55,                          &
+        &    5.25,  0.0,  2.79, 4.26,  11.55,  2.79,                            &
+        &    2.79,  0.00,  0.00, 0.00,  0.00,  0.00,                            &
+        &    0.00,  0.00,  0.00, 0.00,  0.00,  0.00/)
+      satpsi= (/0.069, 0.036, 0.141, 0.759, 0.955, &
+        &   0.355, 0.135, 0.617, 0.263, 0.098, 0.324, 0.468,                    &
+        &   0.355, 0.00, 0.069, 0.036, 0.468, 0.069,                            &
+        &   0.069, 0.00, 0.00, 0.00, 0.00, 0.00,                                &
+        &   0.00, 0.00, 0.00, 0.00, 0.00, 0.00/)
+
+    else
+        print*, 'For Noah-MP, set_soilveg is not supported for soil type ', isot
+        iret = -1
+        return
+
+    endif
+
+    iret = 0
+  end subroutine set_soilveg_noahmp
+  
 end module soil_increments
