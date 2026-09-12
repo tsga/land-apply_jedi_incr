@@ -40,32 +40,23 @@ namespace landincr {
       // We assume both state and increment are in the same geometry
       // const ijedi::Geometry<fv3jedi::Traits> geom_(eckit::LocalConfiguration(fullConfig, "geometry"),this->getComm());
       fv3jedi::Geometry geom_(eckit::LocalConfiguration(fullConfig, "geometry"),this->getComm());
+      // oops::Log::info() << "geom ny "<<geom_.npy() << " nx " << geom_.npx() << std::endl;
 
       // Read state
       // ijedi::State<ijedi::Traits> xx(geom_, eckit::LocalConfiguration(fullConfig, "background state"));
       fv3jedi::State xx(geom_, eckit::LocalConfiguration(fullConfig, "background state"));
       oops::Log::test() << "Background state: " << xx << std::endl;
 
-      // Read increment
-      const eckit::LocalConfiguration incParams(fullConfig, "increment");
-      int lsoil_incr = 2;
-      incParams.get("lsoil_incr", lsoil_incr);
-
-      oops::Variables incVars(incParams, "variables");
-      // ijedi::Increment<ijedi::Traits> dx(geom_, incVars, xx.validTime());
-      fv3jedi::Increment dx(geom_, incVars, xx.validTime());
-      dx.read(incParams);
-      oops::Log::test() << "Increment: " << dx << std::endl;
-
-      // Scale increment
-      // ToDO: may not need for land (land_adj takes care of it if needed)
-      /* if (incParams.has("scaling factor")) {
-        dx *= incParams.getDouble("scaling factor");
-        oops::Log::test() << "Scaled Increment: " << dx << std::endl;
-      }*/
-
       atlas::FieldSet bkg_fs;
       xx.toFieldSet(bkg_fs);
+
+      // assuming field-rank 2
+      atlas::Field stc_field = bkg_fs["stc"];
+      int frank = stc_field.rank();
+      if (frank > 2){
+          oops::Log::error() << "Field stc rank "<< frank<<" but expected 2." << std::endl;
+          throw eckit::BadValue("Erroneous field rank", Here());
+      }
 
       // check required fields exist in the fieldset
       if (!bkg_fs.has("sheleg") ) {
@@ -77,12 +68,12 @@ namespace landincr {
           oops::Log::error() << "Missing required fields vtype in state FieldSet. Aborting." << std::endl;
           throw eckit::BadValue("Missing required fields in state FieldSet", Here());
       }
-      auto bkg_vtype = atlas::array::make_view<float, 2>(bkg_fs["vtype"]);
+      auto bkgv_vtype = atlas::array::make_view<double, 2>(bkg_fs["vtype"]);
       if (!bkg_fs.has("stype") ) {
           oops::Log::error() << "Missing required fields stype in state FieldSet. Aborting." << std::endl;
           throw eckit::BadValue("Missing required fields in state FieldSet", Here());
       }
-      auto bkg_stype = atlas::array::make_view<float, 2>(bkg_fs["stype"]);
+      auto bkgv_stype = atlas::array::make_view<double, 2>(bkg_fs["stype"]);
 
       if (!bkg_fs.has("stc") ) {
           oops::Log::error() << "Missing required fields stc in state FieldSet. Aborting." << std::endl;
@@ -94,32 +85,32 @@ namespace landincr {
           throw eckit::BadValue("Missing required fields in state FieldSet", Here());
       }
       auto bkgv_slc = atlas::array::make_view<double, 2>(bkg_fs["slc"]);
-      if (!bkg_fs.has("smc") ) {
+      if (!bkg_fs.has("soilMoistureVolumetric") ) {  // smc") ) {
           oops::Log::error() << "Missing required fields smc in state FieldSet. Aborting." << std::endl;
           throw eckit::BadValue("Missing required fields in state FieldSet", Here());
       }
-      auto bkgv_smc = atlas::array::make_view<double, 2>(bkg_fs["smc"]);
-      
+      auto bkgv_smc = atlas::array::make_view<double, 2>(bkg_fs["soilMoistureVolumetric"]);
+      // oops::Log::info() << "Finished reading background state" << std::endl;
+
       // vtype and stype to integers
       int len_land_vec = bkg_fs["sheleg"].shape(0);
-      std::vector<int> ivtype(len_land_vec, -1);
-      std::vector<int> istype(len_land_vec, -1);
-      for (int i = 0; i < len_land_vec; ++i) {
-        ivtype[i] = static_cast<int>(bkg_vtype(i, 0));
-        istype[i] = static_cast<int>(bkg_stype(i, 0));
+      int lsoil = bkg_fs["stc"].shape(1);
+      if (lsoil != lsoilc) {
+	 oops::Log::error() << "lsoil " << lsoil << " must be equal to " << lsoilc << std::endl;
+	 throw eckit::BadValue("The expected number of soil layers is 4 ", Here());
       }
       // state vectors. TODO: do this in the fort-cpp interface
       auto bkg_swe = viewToVector1D(bkgv_swe);
+      auto bkg_vtype = viewToVector1D(bkgv_vtype);
+      auto bkg_stype = viewToVector1D(bkgv_stype); 
       auto bkg_stc = viewToVector2D(bkgv_stc);
       auto bk_bkg_stc = viewToVector2D(bkgv_stc);
       auto bkg_slc = viewToVector2D(bkgv_slc);
       auto bkg_smc = viewToVector2D(bkgv_smc); 
 
       // Read increment
+      // oops::Log::info() << "Reading increment" << std::endl;
       const eckit::LocalConfiguration incParams(fullConfig, "increment");
-      int lsoil_incr = 2;
-      incParams.get("lsoil_incr", lsoil_incr);
-
       oops::Variables incVars(incParams, "variables");
       // ijedi::Increment<ijedi::Traits> dx(geom_, incVars, xx.validTime());
       fv3jedi::Increment dx(geom_, incVars, xx.validTime());
@@ -129,28 +120,29 @@ namespace landincr {
       bool upd_stc = false, upd_slc = false;
       atlas::FieldSet inc_fs;
       dx.toFieldSet(inc_fs);
-
-      std::vector<std::vector<float>> stc_inc;
-      if (bkg_fs.has("stc_inc")) {
-        auto stcv_inc = atlas::array::make_view<double, 2>(inc_fs["stc_inc"]);
+      int lsoil_incr = incParams.getInt("lsoil_incr");
+      std::vector<std::vector<double>> stc_inc(len_land_vec, std::vector<double>(lsoil_incr, 0.0f));
+      if (inc_fs.has("stc")) {
+        auto stcv_inc = atlas::array::make_view<double, 2>(inc_fs["stc"]);
         stc_inc = viewToVector2D(stcv_inc);
         upd_stc = true;
         oops::Log::info() << "Updating stc" << std::endl;
       }
       
-      std::vector<std::vector<float>> slc_inc;
-      if (inc_fs.has("slc_inc")) {
-        auto slcv_inc = atlas::array::make_view<double, 2>(inc_fs["slc_inc"]);
+      std::vector<std::vector<double>> slc_inc(len_land_vec, std::vector<double>(lsoil_incr, 0.0f));
+      if (inc_fs.has("slc")) {
+        auto slcv_inc = atlas::array::make_view<double, 2>(inc_fs["slc"]);
         slc_inc = viewToVector2D(slcv_inc);
         upd_slc = true;
         oops::Log::info() << "Updating slc" << std::endl;
       }
-
+      // oops::Log::info() << "Done reading increment. len_land_vec: " << len_land_vec << std::endl;
+ 
       // read/construct mask for landice and snow tiles
       // std::vector<int> mask_landice(geom_.nlevsfc(), 0);
       std::vector<int> soil_mask(len_land_vec, 0);
       // TODO: check if landfrac and icefrac are relevant for mask
-      SoilIncrements::calculateLandIncrementMask(bkg_swe, ivtype, istype, 
+      SoilIncrements::calculateLandIncrementMask(bkg_swe, bkg_vtype, bkg_stype, 
                               len_land_vec, veg_type_landice, soil_mask);
       // zero out increments for mask not equal to 1
       for (int i = 0; i < len_land_vec; ++i) {
@@ -206,7 +198,7 @@ namespace landincr {
    private:
       static constexpr std::array<float, 4> zsoil = { -0.1, -0.4, -1.0, -2.0 };
       static constexpr int veg_type_landice = 15;
-      static constexpr int lsoil = 4;     // zsoil is hard-coded for 4 layers
+      static constexpr int lsoilc = 4;     // zsoil is hard-coded for 4 layers
       static constexpr int ivegsrc = 1;   // The NOAHMP LSM expects that the ivegsrc physics parameter is 1
       static constexpr int isot = 1;      // Noahmp expects 1
       // hard coded defaults--unlikely to change
@@ -214,19 +206,19 @@ namespace landincr {
       float fice_threshold = 0.0;
       float lfrac_threshold = 0.0001;
       
-      std::vector<float> viewToVector1D(const atlas::array::ArrayView<double, 2>& view) const {
-        std::vector<float> vector1D(view.shape(0),0.0);
+      std::vector<double> viewToVector1D(const atlas::array::ArrayView<double, 2>& view) const {
+        std::vector<double> vector1D(view.shape(0),0.0);
         for (size_t i = 0; i < view.shape(0); ++i) {
-            vector1D[i] = static_cast<float>(view(i, 0)); 
+            vector1D[i] = view(i, 0); 
         }
         return vector1D;
       }  
 
-       std::vector<std::vector<float>> viewToVector2D(const atlas::array::ArrayView<double, 2>& view) const {
-	std::vector<std::vector<float>> vector2D(view.shape(0), std::vector<float>(view.shape(1),0.0));
+       std::vector<std::vector<double>> viewToVector2D(const atlas::array::ArrayView<double, 2>& view) const {
+	std::vector<std::vector<double>> vector2D(view.shape(0), std::vector<double>(view.shape(1),0.0));
         for (size_t i = 0; i < view.shape(0); ++i) {
           for (size_t j = 0; j < view.shape(1); ++j) {
-            vector2D[i][j] = static_cast<float>(view(i, j));
+            vector2D[i][j] = view(i, j);
           }
         }
         return vector2D;
